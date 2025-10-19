@@ -1,0 +1,13 @@
+Team,Member,Role,HoursPerDay,AllocationPct,CalendarSource
+CraicForce,Jenny,SL/PO,6.5,0.8,CSV
+CraicForce,Kevin,BA,6.5,0.8,CSV
+CraicForce,Ravi,Dev,6.5,0.8,CSV
+CraicForce,Pratik,Dev,6.5,0.8,CSV
+CraicForce,Kaitlin,QA,6.5,0.8,CSV
+CraicForce,Vahe,QA,6.5,0.8,CSV
+PsiForce,Sarah,SL,6.5,0.8,CSV
+PsiForce,Katie,BA,6.5,0.8,CSV
+PsiForce,Sergio,BA,6.5,0.8,CSV
+PsiForce,Varun,Dev,6.5,0.8,CSV
+PsiForce,Dorian,Dev,6.5,0.8,CSV
+PsiForce,Prateek,QA,6.5,0.8,CSV
