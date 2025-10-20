@@ -11,18 +11,21 @@ Private Const xlValidateDecimal As Long = 2
 
 Public Sub Bootstrap()
     On Error GoTo Fail
+    LogStart "Bootstrap"
     Application.ScreenUpdating = False
 
-    EnsureSheets
-    EnsureTables
-    SeedNamedValues
-    SeedSamplesIfPresent
+    LogStart "EnsureSheets": EnsureSheets: LogOk "EnsureSheets"
+    LogStart "EnsureTables": EnsureTables: LogOk "EnsureTables"
+    LogStart "SeedNamedValues": SeedNamedValues: LogOk "SeedNamedValues"
+    LogStart "SeedSamplesIfPresent": SeedSamplesIfPresent: LogOk "SeedSamplesIfPresent"
 
     Application.ScreenUpdating = True
     MsgBox "Bootstrap complete.", vbInformation
+    LogOk "Bootstrap"
     Exit Sub
 Fail:
     Application.ScreenUpdating = True
+    LogErr "Bootstrap", "Err " & Err.Number & ": " & Err.Description
     MsgBox "Bootstrap failed: " & Err.Description, vbExclamation
 End Sub
 
@@ -69,6 +72,7 @@ Private Sub SeedNamedValues()
     EnsureNamedValue "DefaultAllocationPct", ws.Range("H6"), 1
     EnsureNamedValue "DefaultHoursPerPoint", ws.Range("H7"), 6
     EnsureNamedValue "RolesWithVelocity", ws.Range("H8"), "Developer,QA"
+    EnsureNamedValue "VerboseLogging", ws.Range("H9"), True
     WriteSettingsLabels ws
     WriteGettingStarted
     EnsureDashboard
@@ -129,7 +133,14 @@ RetryPlacement:
     On Error GoTo Overlap
     Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range(ws.Cells(startRow, 1), ws.Cells(startRow, lastCol)), , xlYes)
     On Error GoTo 0
+    ' Safe naming: avoid workbook-level name collision (1004)
+    On Error Resume Next
     lo.Name = tableName
+    If Err.Number <> 0 Then
+        Err.Clear
+        lo.Name = UniqueTableName(ws.Parent, tableName)
+    End If
+    On Error GoTo 0
     Set EnsureTable = lo
     Exit Function
 
@@ -163,14 +174,25 @@ Private Function NextFreeRow(ByVal ws As Worksheet) As Long
 End Function
 
 Private Sub EnsureNamedValue(ByVal nm As String, ByVal target As Range, ByVal defaultValue As Variant)
+    Dim n As Name
     On Error Resume Next
-    Dim n As Name: Set n = ThisWorkbook.Names(nm)
+    Set n = ThisWorkbook.Names(nm)
     On Error GoTo 0
     If n Is Nothing Then
         target.Value = defaultValue
-        ThisWorkbook.Names.Add nm, target
-    ElseIf Len(CStr(n.RefersToRange.Value)) = 0 Then
-        n.RefersToRange.Value = defaultValue
+        ThisWorkbook.Names.Add Name:=nm, RefersTo:=target
+        Exit Sub
+    End If
+    Dim ref As Range
+    On Error Resume Next
+    Set ref = n.RefersToRange
+    On Error GoTo 0
+    If ref Is Nothing Then
+        ' Rebind broken external/invalid name to the provided target cell
+        n.RefersTo = "='" & target.Worksheet.Name & "'!" & target.Address(True, True, xlA1)
+        target.Value = defaultValue
+    ElseIf Len(CStr(ref.Value)) = 0 Then
+        ref.Value = defaultValue
     End If
 End Sub
 
@@ -182,6 +204,7 @@ Private Sub WriteSettingsLabels(ByVal ws As Worksheet)
     ws.Range("G6").Value = "DefaultAllocationPct (optional)"
     ws.Range("G7").Value = "DefaultHoursPerPoint"
     ws.Range("G8").Value = "RolesWithVelocity (comma list)"
+    ws.Range("G9").Value = "VerboseLogging (TRUE/FALSE)"
     ws.Columns("G:H").AutoFit
 End Sub
 
@@ -346,6 +369,59 @@ Private Sub LogEvent(ByVal action As String, ByVal outcome As String, ByVal deta
     r.Range(1, 3).Value = action
     r.Range(1, 4).Value = outcome
     r.Range(1, 5).Value = details
+End Sub
+
+Private Function IsVerbose() As Boolean
+    On Error Resume Next
+    Dim v As Variant
+    v = ThisWorkbook.Names("VerboseLogging").RefersToRange.Value
+    On Error GoTo 0
+    If VarType(v) = vbString Then
+        IsVerbose = (UCase$(CStr(v)) = "TRUE")
+    ElseIf IsNumeric(v) Then
+        IsVerbose = (CDbl(v) <> 0)
+    Else
+        IsVerbose = True
+    End If
+End Function
+
+Private Function UniqueTableName(ByVal wb As Workbook, ByVal base As String) As String
+    Dim name As String: name = base
+    Dim i As Long: i = 1
+    Do While TableNameExists(wb, name)
+        i = i + 1
+        name = base & "_" & CStr(i)
+    Loop
+    UniqueTableName = name
+End Function
+
+Private Function TableNameExists(ByVal wb As Workbook, ByVal nm As String) As Boolean
+    Dim sh As Worksheet, lo As ListObject
+    For Each sh In wb.Worksheets
+        For Each lo In sh.ListObjects
+            If StrComp(lo.Name, nm, vbTextCompare) = 0 Then TableNameExists = True: Exit Function
+        Next lo
+    Next sh
+    TableNameExists = False
+End Function
+
+Private Sub LogStart(ByVal action As String, Optional ByVal details As String = "")
+    If IsVerbose() Then LogEvent action, "START", details
+End Sub
+
+Private Sub LogOk(ByVal action As String, Optional ByVal details As String = "")
+    If IsVerbose() Then LogEvent action, "OK", details
+End Sub
+
+Private Sub LogErr(ByVal action As String, Optional ByVal details As String = "")
+    LogEvent action, "ERROR", details
+End Sub
+
+Public Sub Diagnostics_RunBootstrap()
+    On Error Resume Next
+    ThisWorkbook.Names("VerboseLogging").RefersToRange.Value = True
+    On Error GoTo 0
+    Bootstrap
 End Sub
 
 ' -------------------- Availability sheet (simple) --------------------
