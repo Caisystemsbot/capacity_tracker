@@ -52,9 +52,19 @@ Public Sub HealthCheck()
     End If
 End Sub
 
+' One-time helper if you ever need to clear tables on Calendars
+Public Sub ResetCalendarsTables()
+    Dim ws As Worksheet: Set ws = EnsureSheet("Calendars")
+    Dim lo As ListObject
+    For Each lo In ws.ListObjects
+        lo.Delete
+    Next lo
+End Sub
+
 ' -------------------- internals --------------------
 
 Private Sub EnsureSheets()
+    EnsureSheet "Getting_Started"
     EnsureSheet "Calendars"
     EnsureSheet "Config_Teams"
     EnsureSheet "Config_Sprints"
@@ -82,6 +92,8 @@ Private Sub SeedNamedValues()
     EnsureNamedValue "DefaultHoursPerDay", ws.Range("H5"), 6.5
     EnsureNamedValue "DefaultAllocationPct", ws.Range("H6"), 0.8
     EnsureNamedValue "DefaultHoursPerPoint", ws.Range("H7"), 6
+    EnsureNamedValue "RolesWithVelocity", ws.Range("H8"), "Dev,QA"
+    WriteGettingStarted
 End Sub
 
 Private Sub SeedSamplesIfPresent()
@@ -118,21 +130,64 @@ Private Function SheetExists(ByVal name As String) As Boolean
     On Error GoTo 0
 End Function
 
+ ' Overlap-safe table creation: finds a free row and retries if needed
 Private Function EnsureTable(ByVal ws As Worksheet, ByVal tableName As String, ByVal headers As Variant) As ListObject
     Dim lo As ListObject
     On Error Resume Next
     Set lo = ws.ListObjects(tableName)
     On Error GoTo 0
-    If lo Is Nothing Then
-        Dim c As Long
-        For c = LBound(headers) To UBound(headers)
-            ws.Cells(1, 1 + c - LBound(headers)).Value = headers(c)
-        Next c
-        Dim lastCol As Long: lastCol = UBound(headers) - LBound(headers) + 1
-        Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range(ws.Cells(1, 1), ws.Cells(1, lastCol)), , xlYes)
-        lo.Name = tableName
+    If Not lo Is Nothing Then
+        Set EnsureTable = lo
+        Exit Function
     End If
+
+    Dim startRow As Long: startRow = NextFreeRow(ws)
+    Dim lastCol As Long: lastCol = UBound(headers) - LBound(headers) + 1
+    Dim c As Long, attempts As Long
+
+RetryPlacement:
+    attempts = attempts + 1
+    If attempts > 25 Then Err.Raise 1004, , "Could not find free space for table: " & tableName
+
+    ' Write header row at candidate position
+    For c = LBound(headers) To UBound(headers)
+        ws.Cells(startRow, 1 + c - LBound(headers)).Value = headers(c)
+    Next c
+
+    On Error GoTo Overlap
+    Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range(ws.Cells(startRow, 1), ws.Cells(startRow, lastCol)), , xlYes)
+    On Error GoTo 0
+    lo.Name = tableName
     Set EnsureTable = lo
+    Exit Function
+
+Overlap:
+    ' Clear the header cells we just wrote (to avoid debris), shift down, and retry
+    On Error Resume Next
+    ws.Range(ws.Cells(startRow, 1), ws.Cells(startRow, lastCol)).ClearContents
+    On Error GoTo 0
+    startRow = startRow + 5
+    GoTo RetryPlacement
+End Function
+
+' Compute the first safe row below all existing tables and used cells
+Private Function NextFreeRow(ByVal ws As Worksheet) As Long
+    Dim r As Long: r = 1
+    Dim lo As ListObject, bottom As Long: bottom = 0
+    For Each lo In ws.ListObjects
+        Dim b As Long
+        b = lo.Range.Row + lo.Range.Rows.Count - 1
+        If b > bottom Then bottom = b
+    Next lo
+    If bottom > 0 Then r = bottom + 2
+
+    Dim usedBottom As Long
+    If Not ws.UsedRange Is Nothing Then
+        usedBottom = ws.UsedRange.Row + ws.UsedRange.Rows.Count - 1
+        If usedBottom >= r Then r = usedBottom + 2
+    End If
+    If r < 1 Then r = 1
+    NextFreeRow = r
 End Function
 
 Private Sub EnsureNamedValue(ByVal nm As String, ByVal target As Range, ByVal defaultValue As Variant)
@@ -145,6 +200,19 @@ Private Sub EnsureNamedValue(ByVal nm As String, ByVal target As Range, ByVal de
     ElseIf Len(CStr(n.RefersToRange.Value)) = 0 Then
         n.RefersToRange.Value = defaultValue
     End If
+End Sub
+
+Private Sub WriteGettingStarted()
+    Dim ws As Worksheet: Set ws = EnsureSheet("Getting_Started")
+    ws.Cells.Clear
+    ws.Range("A1").Value = "Getting Started"
+    ws.Range("A2").Value = "1) Populate your team roster on sheet 'Config_Teams' table 'tblRoster'."
+    ws.Range("A3").Value = "   Columns: Team, Member, Role, HoursPerDay, AllocationPct"
+    ws.Range("A4").Value = "2) Only roles listed in named cell 'RolesWithVelocity' contribute to velocity (default: Dev, QA)."
+    ws.Range("A5").Value = "3) Holidays live in 'Calendars'!tblHolidays."
+    ws.Range("A6").Value = "4) PTO: You can import a CSV via macro 'ImportPTO_CSV' or type rows into 'Calendars'!tblPTO."
+    ws.Range("A7").Value = "5) Named defaults live on 'Config_Sprints' H2:H8 (ActiveTeam, SprintLengthDays, etc.)."
+    ws.Range("A8").Value = "6) Run 'HealthCheck' anytime to validate required pieces."
 End Sub
 
 Private Sub ImportCsvToTable(ByVal filePath As String, ByVal lo As ListObject, ByVal hasHeader As Boolean)
@@ -212,4 +280,3 @@ Private Sub LogEvent(ByVal action As String, ByVal outcome As String, ByVal deta
     r.Range(1, 4).Value = outcome
     r.Range(1, 5).Value = details
 End Sub
-

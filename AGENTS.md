@@ -22,5 +22,5 @@ Next actions
 - Provide simple docs and sample CSVs.
 
 Running work log
-- [YYYY-MM-DD] Repo reset to empty. Planning minimal baseline on `feature/restart`.
-
+- [2025-10-19] Repo reset to empty. Planning minimal baseline on `feature/restart`.
+- [2025-10-19] Added minimal single-module baseline, Getting_Started sheet, and docs (README, SCHEMA, GETTING_STARTED, ROADMAP, PTO_OPTIONS). No PTO automation yet.

@@ -13,4 +13,7 @@ Tables
 - tblLogs: Timestamp, User, Action, Outcome, Details
 
 Named values
-- ActiveTeam, TemplateVersion, SprintLengthDays, DefaultHoursPerDay, DefaultAllocationPct, DefaultHoursPerPoint
+- ActiveTeam, TemplateVersion, SprintLengthDays, DefaultHoursPerDay, DefaultAllocationPct, DefaultHoursPerPoint, RolesWithVelocity
+
+Planned tables (next)
+- Sprint_Capacity_[Team]: Date, Team, Member, HoursPerDay, AllocationPct, PTOHours, NetHours, Points
