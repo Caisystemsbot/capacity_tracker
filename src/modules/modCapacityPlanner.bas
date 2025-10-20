@@ -133,7 +133,14 @@ RetryPlacement:
     On Error GoTo Overlap
     Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range(ws.Cells(startRow, 1), ws.Cells(startRow, lastCol)), , xlYes)
     On Error GoTo 0
+    ' Safe naming: avoid workbook-level name collision (1004)
+    On Error Resume Next
     lo.Name = tableName
+    If Err.Number <> 0 Then
+        Err.Clear
+        lo.Name = UniqueTableName(ws.Parent, tableName)
+    End If
+    On Error GoTo 0
     Set EnsureTable = lo
     Exit Function
 
@@ -144,6 +151,26 @@ Overlap:
     On Error GoTo 0
     startRow = startRow + 5
     GoTo RetryPlacement
+End Function
+
+Private Function UniqueTableName(ByVal wb As Workbook, ByVal base As String) As String
+    Dim name As String: name = base
+    Dim i As Long: i = 1
+    Do While TableNameExists(wb, name)
+        i = i + 1
+        name = base & "_" & CStr(i)
+    Loop
+    UniqueTableName = name
+End Function
+
+Private Function TableNameExists(ByVal wb As Workbook, ByVal nm As String) As Boolean
+    Dim sh As Worksheet, lo As ListObject
+    For Each sh In wb.Worksheets
+        For Each lo In sh.ListObjects
+            If StrComp(lo.Name, nm, vbTextCompare) = 0 Then TableNameExists = True: Exit Function
+        Next lo
+    Next sh
+    TableNameExists = False
 End Function
 
 ' Compute the first safe row below all existing tables and used cells
