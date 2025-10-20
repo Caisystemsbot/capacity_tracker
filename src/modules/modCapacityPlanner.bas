@@ -11,18 +11,21 @@ Private Const xlValidateDecimal As Long = 2
 
 Public Sub Bootstrap()
     On Error GoTo Fail
+    LogStart "Bootstrap"
     Application.ScreenUpdating = False
 
-    EnsureSheets
-    EnsureTables
-    SeedNamedValues
-    SeedSamplesIfPresent
+    LogStart "EnsureSheets": EnsureSheets: LogOk "EnsureSheets"
+    LogStart "EnsureTables": EnsureTables: LogOk "EnsureTables"
+    LogStart "SeedNamedValues": SeedNamedValues: LogOk "SeedNamedValues"
+    LogStart "SeedSamplesIfPresent": SeedSamplesIfPresent: LogOk "SeedSamplesIfPresent"
 
     Application.ScreenUpdating = True
     MsgBox "Bootstrap complete.", vbInformation
+    LogOk "Bootstrap"
     Exit Sub
 Fail:
     Application.ScreenUpdating = True
+    LogErr "Bootstrap", "Err " & Err.Number & ": " & Err.Description
     MsgBox "Bootstrap failed: " & Err.Description, vbExclamation
 End Sub
 
@@ -69,6 +72,7 @@ Private Sub SeedNamedValues()
     EnsureNamedValue "DefaultAllocationPct", ws.Range("H6"), 1
     EnsureNamedValue "DefaultHoursPerPoint", ws.Range("H7"), 6
     EnsureNamedValue "RolesWithVelocity", ws.Range("H8"), "Developer,QA"
+    EnsureNamedValue "VerboseLogging", ws.Range("H9"), True
     WriteSettingsLabels ws
     WriteGettingStarted
     EnsureDashboard
@@ -129,7 +133,14 @@ RetryPlacement:
     On Error GoTo Overlap
     Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range(ws.Cells(startRow, 1), ws.Cells(startRow, lastCol)), , xlYes)
     On Error GoTo 0
+    ' Safe naming: avoid workbook-level name collision (1004)
+    On Error Resume Next
     lo.Name = tableName
+    If Err.Number <> 0 Then
+        Err.Clear
+        lo.Name = UniqueTableName(ws.Parent, tableName)
+    End If
+    On Error GoTo 0
     Set EnsureTable = lo
     Exit Function
 
@@ -140,6 +151,26 @@ Overlap:
     On Error GoTo 0
     startRow = startRow + 5
     GoTo RetryPlacement
+End Function
+
+Private Function UniqueTableName(ByVal wb As Workbook, ByVal base As String) As String
+    Dim name As String: name = base
+    Dim i As Long: i = 1
+    Do While TableNameExists(wb, name)
+        i = i + 1
+        name = base & "_" & CStr(i)
+    Loop
+    UniqueTableName = name
+End Function
+
+Private Function TableNameExists(ByVal wb As Workbook, ByVal nm As String) As Boolean
+    Dim sh As Worksheet, lo As ListObject
+    For Each sh In wb.Worksheets
+        For Each lo In sh.ListObjects
+            If StrComp(lo.Name, nm, vbTextCompare) = 0 Then TableNameExists = True: Exit Function
+        Next lo
+    Next sh
+    TableNameExists = False
 End Function
 
 ' Compute the first safe row below all existing tables and used cells
@@ -182,6 +213,7 @@ Private Sub WriteSettingsLabels(ByVal ws As Worksheet)
     ws.Range("G6").Value = "DefaultAllocationPct (optional)"
     ws.Range("G7").Value = "DefaultHoursPerPoint"
     ws.Range("G8").Value = "RolesWithVelocity (comma list)"
+    ws.Range("G9").Value = "VerboseLogging (TRUE/FALSE)"
     ws.Columns("G:H").AutoFit
 End Sub
 
@@ -348,6 +380,40 @@ Private Sub LogEvent(ByVal action As String, ByVal outcome As String, ByVal deta
     r.Range(1, 5).Value = details
 End Sub
 
+Private Function IsVerbose() As Boolean
+    On Error Resume Next
+    Dim v As Variant
+    v = ThisWorkbook.Names("VerboseLogging").RefersToRange.Value
+    On Error GoTo 0
+    If VarType(v) = vbString Then
+        IsVerbose = (UCase$(CStr(v)) = "TRUE")
+    ElseIf IsNumeric(v) Then
+        IsVerbose = (CDbl(v) <> 0)
+    Else
+        IsVerbose = True
+    End If
+End Function
+
+Private Sub LogStart(ByVal action As String, Optional ByVal details As String = "")
+    If IsVerbose() Then LogEvent action, "START", details
+End Sub
+
+Private Sub LogOk(ByVal action As String, Optional ByVal details As String = "")
+    If IsVerbose() Then LogEvent action, "OK", details
+End Sub
+
+Private Sub LogErr(ByVal action As String, Optional ByVal details As String = "")
+    LogEvent action, "ERROR", details
+End Sub
+
+Public Sub Diagnostics_RunBootstrap()
+    ' Forces verbose logging for this run
+    On Error Resume Next
+    ThisWorkbook.Names("VerboseLogging").RefersToRange.Value = True
+    On Error GoTo 0
+    Bootstrap
+End Sub
+
 ' -------------------- Availability sheet (simple) --------------------
 
 Private Sub EnsureDashboard()
@@ -361,18 +427,13 @@ Private Sub EnsureDashboard()
     ws.Range("B6").Formula = "=SprintLengthDays"
     ws.Range("A1:A6").Font.Bold = True
 
-    ' Create or refresh the button
+    ' Create or refresh the button (single action)
     On Error Resume Next
     ws.Buttons("btnCreateAvailability").Delete
     ws.Buttons("btnAdvanceAvailability").Delete
     On Error GoTo 0
-    Dim btn As Button
-    Set btn = ws.Buttons.Add(Left:=20, Top:=80, Width:=220, Height:=28)
-    btn.Name = "btnCreateAvailability"
-    btn.OnAction = "modCapacityPlanner.CreateTeamAvailability"
-    btn.Characters.Text = "Create Team Availability"
     Dim btn2 As Button
-    Set btn2 = ws.Buttons.Add(Left:=20, Top:=115, Width:=220, Height:=28)
+    Set btn2 = ws.Buttons.Add(Left:=20, Top:=80, Width:=240, Height:=28)
     btn2.Name = "btnAdvanceAvailability"
     btn2.OnAction = "modCapacityPlanner.CreateOrAdvanceAvailability"
     btn2.Characters.Text = "Create/Advance Availability"
@@ -436,8 +497,8 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
     End If
 
     ' Build ordered index: contributors first
-    Dim order() As Long, count As Long
-    order = BuildRosterOrder(members, contrib, count)
+    Dim order() As Long, count As Long, yesCount As Long
+    order = BuildRosterOrder(members, contrib, roles, count, yesCount)
 
     ' Headers
     ws.Range("A5").Value = "Day of Week"
@@ -453,6 +514,12 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
         ws.Cells(5, col).Value = hdr
         col = col + 1
     Next i
+
+    ' Top-left metrics placeholders
+    ws.Range("A1").Value = "Average Velocity per Available Day"
+    ws.Range("B1").Value = 0
+    ws.Range("A2").Value = "Available Days"
+    ws.Range("A3").Value = "Full Capacity Points"
 
     ' Fill 14 calendar days starting at sprint start
     Dim targetDays As Long: targetDays = CLng(GetNameValueOr("SprintLengthDays", "10"))
@@ -483,6 +550,17 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
     For col = 4 To 3 + count
         ws.Cells(row, col).FormulaR1C1 = "=SUM(R[-14]C:R[-1]C)"
     Next col
+
+    ' Now bind top-left metrics
+    Dim rngYes As String
+    If yesCount > 0 Then
+        rngYes = ws.Range(ws.Cells(row, 4), ws.Cells(row, 3 + yesCount)).Address(False, False)
+        ws.Range("B2").Formula = "=SUM(" & rngYes & ")"
+        ws.Range("B3").Formula = "=IFERROR(B2*(DefaultHoursPerDay/DefaultHoursPerPoint),0)"
+    Else
+        ws.Range("B2").Value = 0
+        ws.Range("B3").Value = 0
+    End If
 
     ' Basic formatting (light)
     ws.Range(ws.Cells(5, 1), ws.Cells(5, 3 + count)).Font.Bold = True
@@ -638,19 +716,12 @@ Private Function EnsureConfig() As Worksheet
         Set cfg = Worksheets("Config")
     Else
         Set cfg = EnsureSheet("Config")
-        ' migrate roster if present
+        ' migrate roster if present (map to new schema)
         If SheetExists("Config_Teams") Then
-            Dim src As Worksheet: Set src = Worksheets("Config_Teams")
-            Dim loSrc As ListObject
-            On Error Resume Next: Set loSrc = src.ListObjects("tblRoster"): On Error GoTo 0
-            Dim loDst As ListObject: Set loDst = EnsureRosterTable(cfg)
-            If Not loSrc Is Nothing Then
-                If loSrc.ListRows.Count > 0 Then
-                    loDst.DataBodyRange.ClearContents
-                    loDst.DataBodyRange.Resize(loSrc.DataBodyRange.Rows.Count, loDst.ListColumns.Count).Value = loSrc.DataBodyRange.Value
-                End If
-            End If
-            src.Visible = 0 ' hide old
+            LogStart "MigrateRoster", "from Config_Teams"
+            Call MigrateOldRosterToConfig(cfg, Worksheets("Config_Teams"))
+            Worksheets("Config_Teams").Visible = 0 ' hide old
+            LogOk "MigrateRoster"
         Else
             Call EnsureRosterTable(cfg)
         End If
@@ -660,15 +731,28 @@ Private Function EnsureConfig() As Worksheet
             Dim namesArr As Variant: namesArr = Array("ActiveTeam","TemplateVersion","SprintLengthDays","DefaultHoursPerDay","DefaultAllocationPct","DefaultHoursPerPoint","RolesWithVelocity")
             Dim i As Long
             For i = LBound(namesArr) To UBound(namesArr)
-                On Error Resume Next
-                Dim nm As Name: Set nm = ThisWorkbook.Names(CStr(namesArr(i)))
-                On Error GoTo 0
+                Dim nm As Name
+                On Error Resume Next: Set nm = ThisWorkbook.Names(CStr(namesArr(i))): On Error GoTo 0
+                Dim rowOff As Long: rowOff = 2 + i
+                Dim v As Variant
+                v = DefaultForSetting(CStr(namesArr(i)))
                 If Not nm Is Nothing Then
-                    ' keep value and rebind to Config sheet same H-row
-                    Dim rowOff As Long: rowOff = 2 + i
-                    cfg.Range("H" & rowOff).Value = nm.RefersToRange.Value
-                    nm.RefersTo = "=" & cfg.Range("H" & rowOff).Address(True, True, xlA1, True)
+                    ' Try to read the existing value safely
+                    On Error Resume Next
+                    v = nm.RefersToRange.Value
+                    If Err.Number <> 0 Then
+                        Err.Clear
+                        ' fall back to evaluating the RefersTo, else keep default
+                        Dim ref As String: ref = nm.RefersTo
+                        If Len(ref) > 1 And Left$(ref, 1) = "=" Then ref = Mid$(ref, 2)
+                        v = v ' keep default if evaluate fails
+                    End If
+                    On Error GoTo 0
                 End If
+                cfg.Range("H" & rowOff).Value = v
+                ' Rebind to sheet-qualified (no external workbook path)
+                If Not nm Is Nothing Then nm.RefersTo = "='" & cfg.Name & "'!" & cfg.Range("H" & rowOff).Address(True, True, xlA1)
+                LogOk "BindSetting", CStr(namesArr(i)) & "=" & CStr(v)
             Next i
             s.Visible = 0 ' hide old
         End If
@@ -676,30 +760,108 @@ Private Function EnsureConfig() As Worksheet
     Set EnsureConfig = cfg
 End Function
 
-Private Function BuildRosterOrder(ByVal members As Variant, ByVal contrib As Variant, ByRef outCount As Long) As Long()
-    Dim n As Long
-    n = UBound(members)
-    Dim yesIdx() As Long, noIdx() As Long
-    ReDim yesIdx(1 To n)
-    ReDim noIdx(1 To n)
-    Dim y As Long: y = 0
-    Dim nn As Long: nn = 0
+Private Sub MigrateOldRosterToConfig(ByVal cfg As Worksheet, ByVal src As Worksheet)
+    On Error GoTo SafeExit
+    Dim loSrc As ListObject
+    On Error Resume Next: Set loSrc = src.ListObjects("tblRoster"): On Error GoTo 0
+    Dim loDst As ListObject: Set loDst = EnsureRosterTable(cfg)
+    If loSrc Is Nothing Then Exit Sub
+    If loSrc.ListRows.Count = 0 Then Exit Sub
+
+    Dim colMember As Long, colRole As Long, colVel As Long
+    colMember = GetColumnIndex(loSrc, "Member")
+    colRole = GetColumnIndex(loSrc, "Role")
+    colVel = GetColumnIndex(loSrc, "ContributesToVelocity")
+
+    Dim r As ListRow
+    For Each r In loSrc.ListRows
+        Dim nr As ListRow: Set nr = loDst.ListRows.Add
+        Dim m As String, role As String, vel As String
+        m = GetCellSafe(r, colMember)
+        role = NormalizeRole(GetCellSafe(r, colRole))
+        If colVel > 0 Then
+            vel = GetCellSafe(r, colVel)
+        Else
+            vel = IIf(UCase$(role) = "DEVELOPER" Or UCase$(role) = "QA", "Yes", "No")
+        End If
+        nr.Range(1, loDst.ListColumns("Member").Index).Value = m
+        nr.Range(1, loDst.ListColumns("Role").Index).Value = role
+        nr.Range(1, loDst.ListColumns("ContributesToVelocity").Index).Value = IIf(UCase$(Left$(Trim$(vel),1))="Y","Yes","No")
+    Next r
+SafeExit:
+End Sub
+
+Private Function GetColumnIndex(ByVal lo As ListObject, ByVal name As String) As Long
+    On Error Resume Next
+    GetColumnIndex = lo.ListColumns(name).Index
+    On Error GoTo 0
+End Function
+
+Private Function GetCellSafe(ByVal r As ListRow, ByVal colIndex As Long) As String
+    If colIndex <= 0 Then
+        GetCellSafe = ""
+    Else
+        GetCellSafe = CStr(r.Range(1, colIndex).Value)
+    End If
+End Function
+
+Private Function NormalizeRole(ByVal raw As String) As String
+    Dim u As String: u = UCase$(Trim$(raw))
+    If u = "DEV" Or InStr(u, "DEVELOPER") > 0 Then NormalizeRole = "Developer": Exit Function
+    If u = "QA" Or InStr(u, "QUALITY") > 0 Then NormalizeRole = "QA": Exit Function
+    If u = "SL" Or InStr(u, "SQUAD") > 0 Then NormalizeRole = "Squad Leader": Exit Function
+    If u = "PM" Or InStr(u, "SCRUM") > 0 Or InStr(u, "PROJECT MANAGER") > 0 Then NormalizeRole = "Project Manager": Exit Function
+    If u = "BA" Or u = "ANALYST" Or InStr(u, "ANALYST") > 0 Then NormalizeRole = "Analyst": Exit Function
+    NormalizeRole = raw
+End Function
+
+Private Function DefaultForSetting(ByVal nm As String) As Variant
+    Select Case UCase$(nm)
+        Case "ACTIVETEAM": DefaultForSetting = "Team"
+        Case "TEMPLATEVERSION": DefaultForSetting = "0.1.0"
+        Case "SPRINTLENGTHDAYS": DefaultForSetting = 10
+        Case "DEFAULTHOURSPERDAY": DefaultForSetting = 6.5
+        Case "DEFAULTALLOCATIONPCT": DefaultForSetting = 1
+        Case "DEFAULTHOURSPERPOINT": DefaultForSetting = 6
+        Case "ROLESWITHVELOCITY": DefaultForSetting = "Developer,QA"
+        Case Else: DefaultForSetting = ""
+    End Select
+End Function
+
+Private Function BuildRosterOrder(ByVal members As Variant, ByVal contrib As Variant, ByVal roles As Variant, ByRef outCount As Long, ByRef yesCount As Long) As Long()
+    Dim n As Long: n = UBound(members)
+    Dim devY() As Long, qaY() As Long, anaN() As Long, slN() As Long, pmN() As Long, other() As Long
+    ReDim devY(1 To n): ReDim qaY(1 To n): ReDim anaN(1 To n): ReDim slN(1 To n): ReDim pmN(1 To n): ReDim other(1 To n)
+    Dim cd As Long, cq As Long, ca As Long, cs As Long, cp As Long, co As Long
     Dim i As Long
     For i = 1 To n
+        Dim isYes As Boolean: isYes = False
         Dim c As String: c = ""
         If Not IsEmpty(contrib) Then If i <= UBound(contrib) Then c = CStr(contrib(i))
-        If UCase$(Left$(Trim$(c), 1)) = "Y" Then
-            y = y + 1: yesIdx(y) = i
+        If UCase$(Left$(Trim$(c), 1)) = "Y" Then isYes = True
+
+        Dim r As String: r = ""
+        If Not IsEmpty(roles) Then If i <= UBound(roles) Then r = UCase$(Trim$(CStr(roles(i))))
+
+        If isYes And r = "DEVELOPER" Then cd = cd + 1: devY(cd) = i
+        ElseIf isYes And r = "QA" Then cq = cq + 1: qaY(cq) = i
+        ElseIf Not isYes And r = "ANALYST" Then ca = ca + 1: anaN(ca) = i
+        ElseIf Not isYes And r = "SQUAD LEADER" Then cs = cs + 1: slN(cs) = i
+        ElseIf Not isYes And (r = "PROJECT MANAGER" Or r = "PROJECT MANAGER (SCRUM MASTER)") Then cp = cp + 1: pmN(cp) = i
         Else
-            nn = nn + 1: noIdx(nn) = i
+            co = co + 1: other(co) = i
         End If
     Next i
-    outCount = y + nn
-    Dim order() As Long
-    ReDim order(1 To outCount)
-    For i = 1 To y: order(i) = yesIdx(i): Next i
-    Dim k As Long: k = y
-    For i = 1 To nn: k = k + 1: order(k) = noIdx(i): Next i
+    yesCount = cd + cq
+    outCount = yesCount + ca + cs + cp + co
+    Dim order() As Long: ReDim order(1 To outCount)
+    Dim k As Long: k = 0
+    For i = 1 To cd: k = k + 1: order(k) = devY(i): Next i
+    For i = 1 To cq: k = k + 1: order(k) = qaY(i): Next i
+    For i = 1 To ca: k = k + 1: order(k) = anaN(i): Next i
+    For i = 1 To cs: k = k + 1: order(k) = slN(i): Next i
+    For i = 1 To cp: k = k + 1: order(k) = pmN(i): Next i
+    For i = 1 To co: k = k + 1: order(k) = other(i): Next i
     BuildRosterOrder = order
 End Function
 
