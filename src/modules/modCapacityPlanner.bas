@@ -4,6 +4,10 @@ Option Explicit
 Private Const xlSrcRange As Long = 1
 Private Const xlYes As Long = 1
 Private Const msoFileDialogFilePicker As Long = 3
+Private Const xlValidateList As Long = 3
+Private Const xlValidAlertStop As Long = 1
+Private Const xlBetween As Long = 1
+Private Const xlValidateDecimal As Long = 2
 
 Public Sub Bootstrap()
     On Error GoTo Fail
@@ -74,7 +78,7 @@ End Sub
 Private Sub EnsureTables()
     Dim ws As Worksheet
     Set ws = EnsureSheet("Config_Teams")
-    EnsureTable ws, "tblRoster", Array("Team", "Member", "Role", "HoursPerDay", "AllocationPct")
+    EnsureRosterTable ws
 
     Set ws = EnsureSheet("Calendars")
     EnsureTable ws, "tblHolidays", Array("Date", "Region", "Name")
@@ -90,7 +94,7 @@ Private Sub SeedNamedValues()
     EnsureNamedValue "TemplateVersion", ws.Range("H3"), "0.1.0"
     EnsureNamedValue "SprintLengthDays", ws.Range("H4"), 10
     EnsureNamedValue "DefaultHoursPerDay", ws.Range("H5"), 6.5
-    EnsureNamedValue "DefaultAllocationPct", ws.Range("H6"), 0.8
+    EnsureNamedValue "DefaultAllocationPct", ws.Range("H6"), 1
     EnsureNamedValue "DefaultHoursPerPoint", ws.Range("H7"), 6
     EnsureNamedValue "RolesWithVelocity", ws.Range("H8"), "Dev,QA"
     WriteGettingStarted
@@ -106,7 +110,7 @@ Private Sub SeedSamplesIfPresent()
 
     Dim lo As ListObject
     If FileExists(roster) Then
-        Set lo = EnsureTable(EnsureSheet("Config_Teams"), "tblRoster", Array("Team", "Member", "Role", "HoursPerDay", "AllocationPct"))
+        Set lo = EnsureRosterTable(EnsureSheet("Config_Teams"))
         If lo.ListRows.Count = 0 Then ImportCsvToTable roster, lo, True
     End If
     If FileExists(hol) Then
@@ -235,6 +239,84 @@ Private Sub ImportCsvToTable(ByVal filePath As String, ByVal lo As ListObject, B
 ContinueLoop:
     Loop
     ts.Close
+End Sub
+
+' Build or repair roster table with new schema and data validation
+Private Function EnsureRosterTable(ByVal ws As Worksheet) As ListObject
+    Dim expected As Variant
+    expected = Array("Member", "Role", "ContributesVelocity", "AllocationPct")
+
+    Dim lo As ListObject
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblRoster")
+    On Error GoTo 0
+
+    Dim rebuild As Boolean: rebuild = False
+    If Not lo Is Nothing Then
+        ' Check header names
+        Dim ok As Boolean: ok = True
+        Dim i As Long
+        If lo.ListColumns.Count <> (UBound(expected) - LBound(expected) + 1) Then
+            ok = False
+        Else
+            For i = 1 To lo.ListColumns.Count
+                If StrComp(lo.ListColumns(i).Name, expected(LBound(expected) + i - 1), vbTextCompare) <> 0 Then
+                    ok = False: Exit For
+                End If
+            Next i
+        End If
+        If Not ok Then rebuild = True
+    Else
+        rebuild = True
+    End If
+
+    If rebuild Then
+        If Not lo Is Nothing Then On Error Resume Next: lo.Delete: On Error GoTo 0
+        Set lo = EnsureTable(ws, "tblRoster", expected)
+        ApplyRosterValidation lo
+    Else
+        ApplyRosterValidation lo
+    End If
+    Set EnsureRosterTable = lo
+End Function
+
+Private Sub ApplyRosterValidation(ByVal lo As ListObject)
+    If lo Is Nothing Then Exit Sub
+    Dim colRole As Long, colVel As Long, colAlloc As Long
+    colRole = lo.ListColumns("Role").Index
+    colVel = lo.ListColumns("ContributesVelocity").Index
+    colAlloc = lo.ListColumns("AllocationPct").Index
+
+    Dim rngRole As Range, rngVel As Range, rngAlloc As Range
+    Set rngRole = lo.DataBodyRange.Columns(colRole)
+    Set rngVel = lo.DataBodyRange.Columns(colVel)
+    Set rngAlloc = lo.DataBodyRange.Columns(colAlloc)
+
+    If rngRole Is Nothing Then Set rngRole = lo.HeaderRowRange.Columns(colRole).Offset(1).Resize(1000, 1)
+    If rngVel Is Nothing Then Set rngVel = lo.HeaderRowRange.Columns(colVel).Offset(1).Resize(1000, 1)
+    If rngAlloc Is Nothing Then Set rngAlloc = lo.HeaderRowRange.Columns(colAlloc).Offset(1).Resize(1000, 1)
+
+    With rngRole.Validation
+        .Delete
+        .Add Type:=xlValidateList, AlertStyle:=xlValidAlertStop, Operator:=xlBetween, _
+            Formula1:="Developer,QA,Analyst,Squad Leader,Project Manager (Scrum Master)"
+        .IgnoreBlank = True
+        .InCellDropdown = True
+    End With
+    With rngVel.Validation
+        .Delete
+        .Add Type:=xlValidateList, AlertStyle:=xlValidAlertStop, Operator:=xlBetween, _
+            Formula1:="Yes,No"
+        .IgnoreBlank = True
+        .InCellDropdown = True
+    End With
+    With rngAlloc.Validation
+        .Delete
+        .Add Type:=xlValidateDecimal, AlertStyle:=xlValidAlertStop, Operator:=xlBetween, _
+            Formula1:="0", Formula2:="1"
+        .IgnoreBlank = True
+        .InCellDropdown = True
+    End With
 End Sub
 
 Private Function FileExists(ByVal p As String) As Boolean

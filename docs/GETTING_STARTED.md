@@ -7,8 +7,12 @@ Steps
 - Alt+F11 → Insert → Module → paste the contents of `src/modules/modCapacityPlanner.bas`.
 - Run `Bootstrap`.
 - Open sheet `Getting_Started` and follow the checklist:
-  - Fill `Config_Teams` → `tblRoster` with your team.
-  - Only roles in `RolesWithVelocity` contribute to velocity (default: `Dev,QA`).
+- Fill `Config_Teams` → `tblRoster` with your team. Columns:
+  - `Member` (person’s name)
+  - `Role` (pick from dropdown: Developer, QA, Analyst, Squad Leader, Project Manager (Scrum Master))
+  - `ContributesVelocity` (Yes/No). Dev/QA = Yes; Analyst/SL/PM = No.
+  - `AllocationPct` (0–1; default 1.0 for 100%).
+- Only roles in `RolesWithVelocity` contribute to velocity by default (Dev, QA). `ContributesVelocity` lets you override per person if needed.
   - Add holidays in `Calendars` → `tblHolidays`.
   - PTO is optional now; you can use `ImportPTO_CSV` later or type directly into `Calendars` → `tblPTO`.
 - Run `HealthCheck` to validate structure.

@@ -9,10 +9,10 @@ Phase 1 — Capacity (next)
 - `CreateNextSprint_Simple(team, startDate, endDate)`
   - Build working days (Mon–Fri), exclude `tblHolidays`.
   - Join roster and PTO to compute per‑member per‑day:
-    - `NetHours = HoursPerDay × AllocationPct − PTODeduct`
+    - `NetHours = DefaultHoursPerDay × AllocationPct − PTODeduct`
     - `Points = NetHours ÷ DefaultHoursPerPoint`
   - Output table `tblSprintCapacity` on sheet `Sprint_Capacity_[Team]` (Date, Team, Member, HoursPerDay, AllocationPct, PTOHours, NetHours, Points).
-- Respect `RolesWithVelocity` for velocity‑contributing roles (Dev/QA default).
+- Respect `ContributesVelocity` (per person) and `RolesWithVelocity` default list.
 
 Phase 2 — Sprint Ops
 - `CreateNextSprint(team)` wrapper to resolve dates from `Config_Sprints`.

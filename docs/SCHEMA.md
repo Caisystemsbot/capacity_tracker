@@ -7,7 +7,7 @@ Sheets
 - Logs: table `tblLogs`
 
 Tables
-- tblRoster: Team, Member, Role, HoursPerDay, AllocationPct
+- tblRoster: Member, Role, ContributesVelocity, AllocationPct
 - tblHolidays: Date, Region, Name
 - tblPTO: Team, Member, Date, Hours, Source
 - tblLogs: Timestamp, User, Action, Outcome, Details
