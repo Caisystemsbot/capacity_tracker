@@ -672,21 +672,45 @@ Private Function EnsureConfig() As Worksheet
             Dim namesArr As Variant: namesArr = Array("ActiveTeam","TemplateVersion","SprintLengthDays","DefaultHoursPerDay","DefaultAllocationPct","DefaultHoursPerPoint","RolesWithVelocity")
             Dim i As Long
             For i = LBound(namesArr) To UBound(namesArr)
-                On Error Resume Next
-                Dim nm As Name: Set nm = ThisWorkbook.Names(CStr(namesArr(i)))
-                On Error GoTo 0
+                Dim nm As Name
+                On Error Resume Next: Set nm = ThisWorkbook.Names(CStr(namesArr(i))): On Error GoTo 0
+                Dim rowOff As Long: rowOff = 2 + i
+                Dim v As Variant
+                v = DefaultForSetting(CStr(namesArr(i)))
                 If Not nm Is Nothing Then
-                    ' keep value and rebind to Config sheet same H-row
-                    Dim rowOff As Long: rowOff = 2 + i
-                    cfg.Range("H" & rowOff).Value = nm.RefersToRange.Value
-                    ' Rebind to sheet-qualified (no external workbook path)
-                    nm.RefersTo = "='" & cfg.Name & "'!" & cfg.Range("H" & rowOff).Address(True, True, xlA1)
+                    ' Try to read the existing value safely
+                    On Error Resume Next
+                    v = nm.RefersToRange.Value
+                    If Err.Number <> 0 Then
+                        Err.Clear
+                        ' fall back to evaluating the RefersTo, else keep default
+                        Dim ref As String: ref = nm.RefersTo
+                        If Len(ref) > 1 And Left$(ref, 1) = "=" Then ref = Mid$(ref, 2)
+                        v = v ' keep default if evaluate fails
+                    End If
+                    On Error GoTo 0
                 End If
+                cfg.Range("H" & rowOff).Value = v
+                ' Rebind to sheet-qualified (no external workbook path)
+                If Not nm Is Nothing Then nm.RefersTo = "='" & cfg.Name & "'!" & cfg.Range("H" & rowOff).Address(True, True, xlA1)
             Next i
             s.Visible = 0 ' hide old
         End If
     End If
     Set EnsureConfig = cfg
+End Function
+
+Private Function DefaultForSetting(ByVal nm As String) As Variant
+    Select Case UCase$(nm)
+        Case "ACTIVETEAM": DefaultForSetting = "Team"
+        Case "TEMPLATEVERSION": DefaultForSetting = "0.1.0"
+        Case "SPRINTLENGTHDAYS": DefaultForSetting = 10
+        Case "DEFAULTHOURSPERDAY": DefaultForSetting = 6.5
+        Case "DEFAULTALLOCATIONPCT": DefaultForSetting = 1
+        Case "DEFAULTHOURSPERPOINT": DefaultForSetting = 6
+        Case "ROLESWITHVELOCITY": DefaultForSetting = "Developer,QA"
+        Case Else: DefaultForSetting = ""
+    End Select
 End Function
 
 Private Function BuildRosterOrder(ByVal members As Variant, ByVal contrib As Variant, ByVal roles As Variant, ByRef outCount As Long, ByRef yesCount As Long) As Long()
