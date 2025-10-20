@@ -679,7 +679,8 @@ Private Function EnsureConfig() As Worksheet
                     ' keep value and rebind to Config sheet same H-row
                     Dim rowOff As Long: rowOff = 2 + i
                     cfg.Range("H" & rowOff).Value = nm.RefersToRange.Value
-                    nm.RefersTo = "=" & cfg.Range("H" & rowOff).Address(True, True, xlA1, True)
+                    ' Rebind to sheet-qualified (no external workbook path)
+                    nm.RefersTo = "='" & cfg.Name & "'!" & cfg.Range("H" & rowOff).Address(True, True, xlA1)
                 End If
             Next i
             s.Visible = 0 ' hide old
