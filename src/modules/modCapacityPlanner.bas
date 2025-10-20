@@ -11,18 +11,21 @@ Private Const xlValidateDecimal As Long = 2
 
 Public Sub Bootstrap()
     On Error GoTo Fail
+    LogStart "Bootstrap"
     Application.ScreenUpdating = False
 
-    EnsureSheets
-    EnsureTables
-    SeedNamedValues
-    SeedSamplesIfPresent
+    LogStart "EnsureSheets": EnsureSheets: LogOk "EnsureSheets"
+    LogStart "EnsureTables": EnsureTables: LogOk "EnsureTables"
+    LogStart "SeedNamedValues": SeedNamedValues: LogOk "SeedNamedValues"
+    LogStart "SeedSamplesIfPresent": SeedSamplesIfPresent: LogOk "SeedSamplesIfPresent"
 
     Application.ScreenUpdating = True
     MsgBox "Bootstrap complete.", vbInformation
+    LogOk "Bootstrap"
     Exit Sub
 Fail:
     Application.ScreenUpdating = True
+    LogErr "Bootstrap", "Err " & Err.Number & ": " & Err.Description
     MsgBox "Bootstrap failed: " & Err.Description, vbExclamation
 End Sub
 
@@ -69,6 +72,7 @@ Private Sub SeedNamedValues()
     EnsureNamedValue "DefaultAllocationPct", ws.Range("H6"), 1
     EnsureNamedValue "DefaultHoursPerPoint", ws.Range("H7"), 6
     EnsureNamedValue "RolesWithVelocity", ws.Range("H8"), "Developer,QA"
+    EnsureNamedValue "VerboseLogging", ws.Range("H9"), True
     WriteSettingsLabels ws
     WriteGettingStarted
     EnsureDashboard
@@ -182,6 +186,7 @@ Private Sub WriteSettingsLabels(ByVal ws As Worksheet)
     ws.Range("G6").Value = "DefaultAllocationPct (optional)"
     ws.Range("G7").Value = "DefaultHoursPerPoint"
     ws.Range("G8").Value = "RolesWithVelocity (comma list)"
+    ws.Range("G9").Value = "VerboseLogging (TRUE/FALSE)"
     ws.Columns("G:H").AutoFit
 End Sub
 
@@ -346,6 +351,40 @@ Private Sub LogEvent(ByVal action As String, ByVal outcome As String, ByVal deta
     r.Range(1, 3).Value = action
     r.Range(1, 4).Value = outcome
     r.Range(1, 5).Value = details
+End Sub
+
+Private Function IsVerbose() As Boolean
+    On Error Resume Next
+    Dim v As Variant
+    v = ThisWorkbook.Names("VerboseLogging").RefersToRange.Value
+    On Error GoTo 0
+    If VarType(v) = vbString Then
+        IsVerbose = (UCase$(CStr(v)) = "TRUE")
+    ElseIf IsNumeric(v) Then
+        IsVerbose = (CDbl(v) <> 0)
+    Else
+        IsVerbose = True
+    End If
+End Function
+
+Private Sub LogStart(ByVal action As String, Optional ByVal details As String = "")
+    If IsVerbose() Then LogEvent action, "START", details
+End Sub
+
+Private Sub LogOk(ByVal action As String, Optional ByVal details As String = "")
+    If IsVerbose() Then LogEvent action, "OK", details
+End Sub
+
+Private Sub LogErr(ByVal action As String, Optional ByVal details As String = "")
+    LogEvent action, "ERROR", details
+End Sub
+
+Public Sub Diagnostics_RunBootstrap()
+    ' Forces verbose logging for this run
+    On Error Resume Next
+    ThisWorkbook.Names("VerboseLogging").RefersToRange.Value = True
+    On Error GoTo 0
+    Bootstrap
 End Sub
 
 ' -------------------- Availability sheet (simple) --------------------
@@ -652,8 +691,10 @@ Private Function EnsureConfig() As Worksheet
         Set cfg = EnsureSheet("Config")
         ' migrate roster if present (map to new schema)
         If SheetExists("Config_Teams") Then
+            LogStart "MigrateRoster", "from Config_Teams"
             Call MigrateOldRosterToConfig(cfg, Worksheets("Config_Teams"))
             Worksheets("Config_Teams").Visible = 0 ' hide old
+            LogOk "MigrateRoster"
         Else
             Call EnsureRosterTable(cfg)
         End If
@@ -684,6 +725,7 @@ Private Function EnsureConfig() As Worksheet
                 cfg.Range("H" & rowOff).Value = v
                 ' Rebind to sheet-qualified (no external workbook path)
                 If Not nm Is Nothing Then nm.RefersTo = "='" & cfg.Name & "'!" & cfg.Range("H" & rowOff).Address(True, True, xlA1)
+                LogOk "BindSetting", CStr(namesArr(i)) & "=" & CStr(v)
             Next i
             s.Visible = 0 ' hide old
         End If
