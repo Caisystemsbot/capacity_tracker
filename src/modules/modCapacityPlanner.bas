@@ -361,18 +361,13 @@ Private Sub EnsureDashboard()
     ws.Range("B6").Formula = "=SprintLengthDays"
     ws.Range("A1:A6").Font.Bold = True
 
-    ' Create or refresh the button
+    ' Create or refresh the button (single action)
     On Error Resume Next
     ws.Buttons("btnCreateAvailability").Delete
     ws.Buttons("btnAdvanceAvailability").Delete
     On Error GoTo 0
-    Dim btn As Button
-    Set btn = ws.Buttons.Add(Left:=20, Top:=80, Width:=220, Height:=28)
-    btn.Name = "btnCreateAvailability"
-    btn.OnAction = "modCapacityPlanner.CreateTeamAvailability"
-    btn.Characters.Text = "Create Team Availability"
     Dim btn2 As Button
-    Set btn2 = ws.Buttons.Add(Left:=20, Top:=115, Width:=220, Height:=28)
+    Set btn2 = ws.Buttons.Add(Left:=20, Top:=80, Width:=240, Height:=28)
     btn2.Name = "btnAdvanceAvailability"
     btn2.OnAction = "modCapacityPlanner.CreateOrAdvanceAvailability"
     btn2.Characters.Text = "Create/Advance Availability"
@@ -436,8 +431,8 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
     End If
 
     ' Build ordered index: contributors first
-    Dim order() As Long, count As Long
-    order = BuildRosterOrder(members, contrib, count)
+    Dim order() As Long, count As Long, yesCount As Long
+    order = BuildRosterOrder(members, contrib, roles, count, yesCount)
 
     ' Headers
     ws.Range("A5").Value = "Day of Week"
@@ -453,6 +448,12 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
         ws.Cells(5, col).Value = hdr
         col = col + 1
     Next i
+
+    ' Top-left metrics placeholders
+    ws.Range("A1").Value = "Average Velocity per Available Day"
+    ws.Range("B1").Value = 0
+    ws.Range("A2").Value = "Available Days"
+    ws.Range("A3").Value = "Full Capacity Points"
 
     ' Fill 14 calendar days starting at sprint start
     Dim targetDays As Long: targetDays = CLng(GetNameValueOr("SprintLengthDays", "10"))
@@ -483,6 +484,17 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
     For col = 4 To 3 + count
         ws.Cells(row, col).FormulaR1C1 = "=SUM(R[-14]C:R[-1]C)"
     Next col
+
+    ' Now bind top-left metrics
+    Dim rngYes As String
+    If yesCount > 0 Then
+        rngYes = ws.Range(ws.Cells(row, 4), ws.Cells(row, 3 + yesCount)).Address(False, False)
+        ws.Range("B2").Formula = "=SUM(" & rngYes & ")"
+        ws.Range("B3").Formula = "=IFERROR(B2*(DefaultHoursPerDay/DefaultHoursPerPoint),0)"
+    Else
+        ws.Range("B2").Value = 0
+        ws.Range("B3").Value = 0
+    End If
 
     ' Basic formatting (light)
     ws.Range(ws.Cells(5, 1), ws.Cells(5, 3 + count)).Font.Bold = True
@@ -676,30 +688,40 @@ Private Function EnsureConfig() As Worksheet
     Set EnsureConfig = cfg
 End Function
 
-Private Function BuildRosterOrder(ByVal members As Variant, ByVal contrib As Variant, ByRef outCount As Long) As Long()
-    Dim n As Long
-    n = UBound(members)
-    Dim yesIdx() As Long, noIdx() As Long
-    ReDim yesIdx(1 To n)
-    ReDim noIdx(1 To n)
-    Dim y As Long: y = 0
-    Dim nn As Long: nn = 0
+Private Function BuildRosterOrder(ByVal members As Variant, ByVal contrib As Variant, ByVal roles As Variant, ByRef outCount As Long, ByRef yesCount As Long) As Long()
+    Dim n As Long: n = UBound(members)
+    Dim devY() As Long, qaY() As Long, anaN() As Long, slN() As Long, pmN() As Long, other() As Long
+    ReDim devY(1 To n): ReDim qaY(1 To n): ReDim anaN(1 To n): ReDim slN(1 To n): ReDim pmN(1 To n): ReDim other(1 To n)
+    Dim cd As Long, cq As Long, ca As Long, cs As Long, cp As Long, co As Long
     Dim i As Long
     For i = 1 To n
+        Dim isYes As Boolean: isYes = False
         Dim c As String: c = ""
         If Not IsEmpty(contrib) Then If i <= UBound(contrib) Then c = CStr(contrib(i))
-        If UCase$(Left$(Trim$(c), 1)) = "Y" Then
-            y = y + 1: yesIdx(y) = i
+        If UCase$(Left$(Trim$(c), 1)) = "Y" Then isYes = True
+
+        Dim r As String: r = ""
+        If Not IsEmpty(roles) Then If i <= UBound(roles) Then r = UCase$(Trim$(CStr(roles(i))))
+
+        If isYes And r = "DEVELOPER" Then cd = cd + 1: devY(cd) = i
+        ElseIf isYes And r = "QA" Then cq = cq + 1: qaY(cq) = i
+        ElseIf Not isYes And r = "ANALYST" Then ca = ca + 1: anaN(ca) = i
+        ElseIf Not isYes And r = "SQUAD LEADER" Then cs = cs + 1: slN(cs) = i
+        ElseIf Not isYes And (r = "PROJECT MANAGER" Or r = "PROJECT MANAGER (SCRUM MASTER)") Then cp = cp + 1: pmN(cp) = i
         Else
-            nn = nn + 1: noIdx(nn) = i
+            co = co + 1: other(co) = i
         End If
     Next i
-    outCount = y + nn
-    Dim order() As Long
-    ReDim order(1 To outCount)
-    For i = 1 To y: order(i) = yesIdx(i): Next i
-    Dim k As Long: k = y
-    For i = 1 To nn: k = k + 1: order(k) = noIdx(i): Next i
+    yesCount = cd + cq
+    outCount = yesCount + ca + cs + cp + co
+    Dim order() As Long: ReDim order(1 To outCount)
+    Dim k As Long: k = 0
+    For i = 1 To cd: k = k + 1: order(k) = devY(i): Next i
+    For i = 1 To cq: k = k + 1: order(k) = qaY(i): Next i
+    For i = 1 To ca: k = k + 1: order(k) = anaN(i): Next i
+    For i = 1 To cs: k = k + 1: order(k) = slN(i): Next i
+    For i = 1 To cp: k = k + 1: order(k) = pmN(i): Next i
+    For i = 1 To co: k = k + 1: order(k) = other(i): Next i
     BuildRosterOrder = order
 End Function
 
