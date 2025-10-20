@@ -14,10 +14,10 @@ Public Sub Bootstrap()
     LogStart "Bootstrap"
     Application.ScreenUpdating = False
 
-    LogStart "EnsureSheets": EnsureSheets: LogOk "EnsureSheets"
-    LogStart "EnsureTables": EnsureTables: LogOk "EnsureTables"
-    LogStart "SeedNamedValues": SeedNamedValues: LogOk "SeedNamedValues"
-    LogStart "SeedSamplesIfPresent": SeedSamplesIfPresent: LogOk "SeedSamplesIfPresent"
+    Step_EnsureSheets
+    Step_EnsureTables
+    Step_SeedNamedValues
+    Step_SeedSamplesIfPresent
 
     Application.ScreenUpdating = True
     MsgBox "Bootstrap complete.", vbInformation
@@ -27,6 +27,50 @@ Fail:
     Application.ScreenUpdating = True
     LogErr "Bootstrap", "Err " & Err.Number & ": " & Err.Description
     MsgBox "Bootstrap failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub Step_EnsureSheets()
+    On Error GoTo Fail
+    LogStart "EnsureSheets"
+    EnsureSheets
+    LogOk "EnsureSheets"
+    Exit Sub
+Fail:
+    LogErr "EnsureSheets", "Err " & Err.Number & " (Erl=" & Erl & "): " & Err.Description
+    Err.Raise Err.Number, , Err.Description
+End Sub
+
+Private Sub Step_EnsureTables()
+    On Error GoTo Fail
+    LogStart "EnsureTables"
+    EnsureTables
+    LogOk "EnsureTables"
+    Exit Sub
+Fail:
+    LogErr "EnsureTables", "Err " & Err.Number & " (Erl=" & Erl & "): " & Err.Description
+    Err.Raise Err.Number, , Err.Description
+End Sub
+
+Private Sub Step_SeedNamedValues()
+    On Error GoTo Fail
+    LogStart "SeedNamedValues"
+    SeedNamedValues
+    LogOk "SeedNamedValues"
+    Exit Sub
+Fail:
+    LogErr "SeedNamedValues", "Err " & Err.Number & " (Erl=" & Erl & "): " & Err.Description
+    Err.Raise Err.Number, , Err.Description
+End Sub
+
+Private Sub Step_SeedSamplesIfPresent()
+    On Error GoTo Fail
+    LogStart "SeedSamplesIfPresent"
+    SeedSamplesIfPresent
+    LogOk "SeedSamplesIfPresent"
+    Exit Sub
+Fail:
+    LogErr "SeedSamplesIfPresent", "Err " & Err.Number & " (Erl=" & Erl & "): " & Err.Description
+    Err.Raise Err.Number, , Err.Description
 End Sub
 
  ' PTO import is deferred; Calendars sheet removed for now.
@@ -725,20 +769,30 @@ Private Function EnsureConfig() As Worksheet
         Else
             Call EnsureRosterTable(cfg)
         End If
-        ' migrate named values if old sheet exists
+        ' migrate named values if old sheet exists (guard against broken externals)
         If SheetExists("Config_Sprints") Then
             Dim s As Worksheet: Set s = Worksheets("Config_Sprints")
             Dim namesArr As Variant: namesArr = Array("ActiveTeam","TemplateVersion","SprintLengthDays","DefaultHoursPerDay","DefaultAllocationPct","DefaultHoursPerPoint","RolesWithVelocity")
             Dim i As Long
             For i = LBound(namesArr) To UBound(namesArr)
-                On Error Resume Next
-                Dim nm As Name: Set nm = ThisWorkbook.Names(CStr(namesArr(i)))
-                On Error GoTo 0
+                Dim nm As Name
+                On Error Resume Next: Set nm = ThisWorkbook.Names(CStr(namesArr(i))): On Error GoTo 0
                 If Not nm Is Nothing Then
-                    ' keep value and rebind to Config sheet same H-row
                     Dim rowOff As Long: rowOff = 2 + i
-                    cfg.Range("H" & rowOff).Value = nm.RefersToRange.Value
-                    nm.RefersTo = "=" & cfg.Range("H" & rowOff).Address(True, True, xlA1, True)
+                    Dim v As Variant, ref As String
+                    On Error Resume Next
+                    v = nm.RefersToRange.Value
+                    If Err.Number <> 0 Then
+                        Err.Clear
+                        ref = nm.RefersTo
+                        If Len(ref) > 1 And Left$(ref, 1) = "=" Then ref = Mid$(ref, 2)
+                        ' Best-effort evaluate; ignore failures
+                        v = v
+                    End If
+                    On Error GoTo 0
+                    cfg.Range("H" & rowOff).Value = v
+                    ' Rebind strictly to this workbook's Config sheet
+                    nm.RefersTo = "='" & cfg.Name & "'!" & cfg.Range("H" & rowOff).Address(True, True, xlA1)
                 End If
             Next i
             s.Visible = 0 ' hide old
