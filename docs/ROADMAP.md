@@ -12,7 +12,7 @@ Phase 1 — Capacity (next)
     - `NetHours = DefaultHoursPerDay × AllocationPct − PTODeduct`
     - `Points = NetHours ÷ DefaultHoursPerPoint`
   - Output table `tblSprintCapacity` on sheet `Sprint_Capacity_[Team]` (Date, Team, Member, HoursPerDay, AllocationPct, PTOHours, NetHours, Points).
-- Respect `ContributesVelocity` (per person) and `RolesWithVelocity` default list.
+- Respect `ContributesToVelocity` (per person) and `RolesWithVelocity` default list.
 
 Phase 2 — Sprint Ops
 - `CreateNextSprint(team)` wrapper to resolve dates from `Config_Sprints`.

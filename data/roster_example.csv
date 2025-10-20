@@ -1,7 +1,7 @@
-Member,Role,ContributesVelocity,AllocationPct
-Jenny,Project Manager (Scrum Master),No,1
-Kevin,Analyst,No,1
-Ravi,Developer,Yes,1
-Pratik,Developer,Yes,1
-Kaitlin,QA,Yes,1
-Vahe,QA,Yes,1
+Member,Role,ContributesToVelocity
+Jenny,Project Manager,No
+Kevin,Analyst,No
+Ravi,Developer,Yes
+Pratik,Developer,Yes
+Kaitlin,QA,Yes
+Vahe,QA,Yes

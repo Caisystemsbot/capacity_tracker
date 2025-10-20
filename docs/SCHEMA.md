@@ -2,18 +2,16 @@
 
 Sheets
 - Config_Teams: table `tblRoster`
-- Calendars: tables `tblHolidays`, `tblPTO`
-- Config_Sprints: config + named values
+- Config_Sprints: config + named values (labels on sheet; can be hidden later)
 - Logs: table `tblLogs`
 
 Tables
-- tblRoster: Member, Role, ContributesVelocity, AllocationPct
-- tblHolidays: Date, Region, Name
-- tblPTO: Team, Member, Date, Hours, Source
+- tblRoster: Member, Role, ContributesToVelocity
 - tblLogs: Timestamp, User, Action, Outcome, Details
 
 Named values
 - ActiveTeam, TemplateVersion, SprintLengthDays, DefaultHoursPerDay, DefaultAllocationPct, DefaultHoursPerPoint, RolesWithVelocity
 
-Planned tables (next)
-- Sprint_Capacity_[Team]: Date, Team, Member, HoursPerDay, AllocationPct, PTOHours, NetHours, Points
+Planned (later)
+- Calendars sheet with `tblHolidays` and `tblPTO`
+- Sprint_Capacity_[Team]: Date, Team, Member, HoursPerDay, NetHours, Points
