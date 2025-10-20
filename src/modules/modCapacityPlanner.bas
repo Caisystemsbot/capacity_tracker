@@ -650,19 +650,10 @@ Private Function EnsureConfig() As Worksheet
         Set cfg = Worksheets("Config")
     Else
         Set cfg = EnsureSheet("Config")
-        ' migrate roster if present
+        ' migrate roster if present (map to new schema)
         If SheetExists("Config_Teams") Then
-            Dim src As Worksheet: Set src = Worksheets("Config_Teams")
-            Dim loSrc As ListObject
-            On Error Resume Next: Set loSrc = src.ListObjects("tblRoster"): On Error GoTo 0
-            Dim loDst As ListObject: Set loDst = EnsureRosterTable(cfg)
-            If Not loSrc Is Nothing Then
-                If loSrc.ListRows.Count > 0 Then
-                    loDst.DataBodyRange.ClearContents
-                    loDst.DataBodyRange.Resize(loSrc.DataBodyRange.Rows.Count, loDst.ListColumns.Count).Value = loSrc.DataBodyRange.Value
-                End If
-            End If
-            src.Visible = 0 ' hide old
+            Call MigrateOldRosterToConfig(cfg, Worksheets("Config_Teams"))
+            Worksheets("Config_Teams").Visible = 0 ' hide old
         Else
             Call EnsureRosterTable(cfg)
         End If
@@ -698,6 +689,61 @@ Private Function EnsureConfig() As Worksheet
         End If
     End If
     Set EnsureConfig = cfg
+End Function
+
+Private Sub MigrateOldRosterToConfig(ByVal cfg As Worksheet, ByVal src As Worksheet)
+    On Error GoTo SafeExit
+    Dim loSrc As ListObject
+    On Error Resume Next: Set loSrc = src.ListObjects("tblRoster"): On Error GoTo 0
+    Dim loDst As ListObject: Set loDst = EnsureRosterTable(cfg)
+    If loSrc Is Nothing Then Exit Sub
+    If loSrc.ListRows.Count = 0 Then Exit Sub
+
+    Dim colMember As Long, colRole As Long, colVel As Long
+    colMember = GetColumnIndex(loSrc, "Member")
+    colRole = GetColumnIndex(loSrc, "Role")
+    colVel = GetColumnIndex(loSrc, "ContributesToVelocity")
+
+    Dim r As ListRow
+    For Each r In loSrc.ListRows
+        Dim nr As ListRow: Set nr = loDst.ListRows.Add
+        Dim m As String, role As String, vel As String
+        m = GetCellSafe(r, colMember)
+        role = NormalizeRole(GetCellSafe(r, colRole))
+        If colVel > 0 Then
+            vel = GetCellSafe(r, colVel)
+        Else
+            vel = IIf(UCase$(role) = "DEVELOPER" Or UCase$(role) = "QA", "Yes", "No")
+        End If
+        nr.Range(1, loDst.ListColumns("Member").Index).Value = m
+        nr.Range(1, loDst.ListColumns("Role").Index).Value = role
+        nr.Range(1, loDst.ListColumns("ContributesToVelocity").Index).Value = IIf(UCase$(Left$(Trim$(vel),1))="Y","Yes","No")
+    Next r
+SafeExit:
+End Sub
+
+Private Function GetColumnIndex(ByVal lo As ListObject, ByVal name As String) As Long
+    On Error Resume Next
+    GetColumnIndex = lo.ListColumns(name).Index
+    On Error GoTo 0
+End Function
+
+Private Function GetCellSafe(ByVal r As ListRow, ByVal colIndex As Long) As String
+    If colIndex <= 0 Then
+        GetCellSafe = ""
+    Else
+        GetCellSafe = CStr(r.Range(1, colIndex).Value)
+    End If
+End Function
+
+Private Function NormalizeRole(ByVal raw As String) As String
+    Dim u As String: u = UCase$(Trim$(raw))
+    If u = "DEV" Or InStr(u, "DEVELOPER") > 0 Then NormalizeRole = "Developer": Exit Function
+    If u = "QA" Or InStr(u, "QUALITY") > 0 Then NormalizeRole = "QA": Exit Function
+    If u = "SL" Or InStr(u, "SQUAD") > 0 Then NormalizeRole = "Squad Leader": Exit Function
+    If u = "PM" Or InStr(u, "SCRUM") > 0 Or InStr(u, "PROJECT MANAGER") > 0 Then NormalizeRole = "Project Manager": Exit Function
+    If u = "BA" Or u = "ANALYST" Or InStr(u, "ANALYST") > 0 Then NormalizeRole = "Analyst": Exit Function
+    NormalizeRole = raw
 End Function
 
 Private Function DefaultForSetting(ByVal nm As String) As Variant
