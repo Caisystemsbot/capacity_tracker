@@ -681,16 +681,36 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
         .LineStyle = 1
         .Weight = 2
     End With
+    ' Role-based column coloring: contributors (first yesCount) light green, others light yellow
+    If count > 0 Then
+        Dim rngContrib As Range, rngNon As Range
+        If yesCount > 0 Then
+            Set rngContrib = ws.Range(ws.Cells(5, 4), ws.Cells(row, 3 + yesCount))
+            rngContrib.Interior.Color = RGB(198, 239, 206) ' light green
+        End If
+        If count > yesCount Then
+            Set rngNon = ws.Range(ws.Cells(5, 4 + yesCount), ws.Cells(row, 3 + count))
+            rngNon.Interior.Color = RGB(255, 242, 204) ' light yellow
+        End If
+    End If
     ' Center availability cells
     If count > 0 Then ws.Range(ws.Cells(6, 4), ws.Cells(row - 1, 3 + count)).HorizontalAlignment = -4108
     ' Totals row emphasis
     ws.Range(ws.Cells(row, 1), ws.Cells(row, 3 + count)).Font.Bold = True
     ws.Range(ws.Cells(row, 1), ws.Cells(row, 3 + count)).Interior.Color = RGB(235, 241, 222)
 
+    ' Auto-size columns
     ws.Columns("A:A").ColumnWidth = 14
     ws.Columns("B:B").ColumnWidth = 8
     ws.Columns("C:C").ColumnWidth = 10
-    ws.Columns("D:Z").ColumnWidth = 10
+    If count > 0 Then
+        Dim ccol As Long
+        ws.Range(ws.Cells(5, 4), ws.Cells(row, 3 + count)).EntireColumn.AutoFit
+        ' enforce minimum width for member columns for readability
+        For ccol = 4 To 3 + count
+            If ws.Columns(ccol).ColumnWidth < 8 Then ws.Columns(ccol).ColumnWidth = 8
+        Next ccol
+    End If
     ' Freeze header row
     ws.Range("A6").Select
     ActiveWindow.FreezePanes = True
