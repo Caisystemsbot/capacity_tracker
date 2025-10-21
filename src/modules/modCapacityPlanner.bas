@@ -96,6 +96,9 @@ Private Sub EnsureSheets()
     EnsureSheet "Getting_Started"
     EnsureSheet "Dashboard"
     EnsureSheet "Logs"
+    ' Ensure Metrics sheet exists (build skeleton once)
+    Dim m As Worksheet: Set m = EnsureSheet("Metrics")
+    If Not HasTable(m, "tblMetrics") Then EnsureMetricsSheet
 End Sub
 
 Private Sub EnsureTables()
@@ -451,6 +454,12 @@ Private Function TableNameExists(ByVal wb As Workbook, ByVal nm As String) As Bo
     TableNameExists = False
 End Function
 
+Private Function HasTable(ByVal ws As Worksheet, ByVal tableName As String) As Boolean
+    On Error Resume Next
+    HasTable = Not ws.ListObjects(tableName) Is Nothing
+    On Error GoTo 0
+End Function
+
 Private Sub LogStart(ByVal action As String, Optional ByVal details As String = "")
     If IsVerbose() Then LogEvent action, "START", details
 End Sub
@@ -589,6 +598,9 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
     ws.Range("B1").Value = 0
     ws.Range("A2").Value = "Available Days"
     ws.Range("A3").Value = "Full Capacity Points"
+    ws.Range("A1:A3").Font.Bold = True
+    ws.Range("A1:B3").Interior.Color = RGB(221, 235, 247)
+    ws.Range("A1:B3").Borders.Weight = 2
 
     ' Fill 14 calendar days starting at sprint start
     Dim targetDays As Long: targetDays = CLng(GetNameValueOr("SprintLengthDays", "10"))
@@ -636,11 +648,34 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
     ' Basic formatting (light)
     phase = "Format"
     ws.Range(ws.Cells(5, 1), ws.Cells(5, 3 + count)).Font.Bold = True
+    ws.Range(ws.Cells(5, 1), ws.Cells(5, 3 + count)).Interior.Color = RGB(217, 225, 242)
+    ' Title over member headers
+    With ws.Range(ws.Cells(4, 4), ws.Cells(4, 3 + count))
+        .Merge
+        .Value = "Squad Member Availability"
+        .HorizontalAlignment = -4108 ' xlCenter
+        .Font.Bold = True
+        .Interior.Color = RGB(217, 225, 242)
+        .Borders.Weight = 2
+    End With
+    ' Grid borders
+    With ws.Range(ws.Cells(5, 1), ws.Cells(row, 3 + count)).Borders
+        .LineStyle = 1
+        .Weight = 2
+    End With
+    ' Center availability cells
+    If count > 0 Then ws.Range(ws.Cells(6, 4), ws.Cells(row - 1, 3 + count)).HorizontalAlignment = -4108
+    ' Totals row emphasis
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 3 + count)).Font.Bold = True
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 3 + count)).Interior.Color = RGB(235, 241, 222)
+
     ws.Columns("A:A").ColumnWidth = 14
     ws.Columns("B:B").ColumnWidth = 8
     ws.Columns("C:C").ColumnWidth = 10
     ws.Columns("D:Z").ColumnWidth = 10
-    ws.Range("A5").Select
+    ' Freeze header row
+    ws.Range("A6").Select
+    ActiveWindow.FreezePanes = True
     If Not toHide Is Nothing Then toHide.Visible = 0 ' xlSheetHidden
     MsgBox "Availability sheet created: " & ws.Name, vbInformation
     Exit Sub
@@ -929,6 +964,9 @@ End Sub
 
 Private Sub EnsureMetricsSheet()
     Dim ws As Worksheet: Set ws = EnsureSheet("Metrics")
+    ' If table already exists, assume user has content and formatting—do not rebuild
+    If HasTable(ws, "tblMetrics") Then Exit Sub
+
     ws.Cells.Clear
 
     ' Headers
