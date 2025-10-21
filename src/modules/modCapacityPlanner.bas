@@ -96,6 +96,9 @@ Private Sub EnsureSheets()
     EnsureSheet "Getting_Started"
     EnsureSheet "Dashboard"
     EnsureSheet "Logs"
+    ' Ensure Metrics sheet exists (build skeleton once)
+    Dim m As Worksheet: Set m = EnsureSheet("Metrics")
+    If Not HasTable(m, "tblMetrics") Then EnsureMetricsSheet
 End Sub
 
 Private Sub EnsureTables()
@@ -407,14 +410,32 @@ Private Function PickFile(ByVal title As String) As String
 End Function
 
 Private Sub LogEvent(ByVal action As String, ByVal outcome As String, ByVal details As String)
+    On Error GoTo SafeExit
+    Dim ws As Worksheet
+    Set ws = EnsureSheet("Logs")
+
     Dim lo As ListObject
-    Set lo = EnsureTable(EnsureSheet("Logs"), "tblLogs", Array("Timestamp", "User", "Action", "Outcome", "Details"))
-    Dim r As ListRow: Set r = lo.ListRows.Add
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblLogs")
+    On Error GoTo 0
+    If lo Is Nothing Then
+        On Error Resume Next
+        Set lo = EnsureTable(ws, "tblLogs", Array("Timestamp", "User", "Action", "Outcome", "Details"))
+        On Error GoTo 0
+    End If
+    If lo Is Nothing Then GoTo SafeExit
+
+    Dim r As ListRow
+    On Error Resume Next
+    Set r = lo.ListRows.Add
+    If r Is Nothing Then GoTo SafeExit
+    On Error GoTo 0
     r.Range(1, 1).Value = Now
     r.Range(1, 2).Value = Environ$("USERNAME")
     r.Range(1, 3).Value = action
     r.Range(1, 4).Value = outcome
     r.Range(1, 5).Value = details
+SafeExit:
 End Sub
 
 Private Function IsVerbose() As Boolean
@@ -449,6 +470,12 @@ Private Function TableNameExists(ByVal wb As Workbook, ByVal nm As String) As Bo
         Next lo
     Next sh
     TableNameExists = False
+End Function
+
+Private Function HasTable(ByVal ws As Worksheet, ByVal tableName As String) As Boolean
+    On Error Resume Next
+    HasTable = Not ws.ListObjects(tableName) Is Nothing
+    On Error GoTo 0
 End Function
 
 Private Sub LogStart(ByVal action As String, Optional ByVal details As String = "")
@@ -584,6 +611,15 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
         col = col + 1
     Next i
 
+    ' Top-left metrics placeholders
+    ws.Range("A1").Value = "Average Velocity per Available Day"
+    ws.Range("B1").Value = 0
+    ws.Range("A2").Value = "Available Days"
+    ws.Range("A3").Value = "Full Capacity Points"
+    ws.Range("A1:A3").Font.Bold = True
+    ws.Range("A1:B3").Interior.Color = RGB(221, 235, 247)
+    ws.Range("A1:B3").Borders.Weight = 2
+
     ' Fill 14 calendar days starting at sprint start
     Dim targetDays As Long: targetDays = CLng(GetNameValueOr("SprintLengthDays", "10"))
     Dim dayIndex As Long, row As Long: row = 6
@@ -616,14 +652,48 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
         ws.Cells(row, col).FormulaR1C1 = "=SUM(R[-14]C:R[-1]C)"
     Next col
 
+    ' Bind metrics block to contributor columns (Developer + QA first)
+    If yesCount > 0 Then
+        Dim rngYes As String
+        rngYes = ws.Range(ws.Cells(row, 4), ws.Cells(row, 3 + yesCount)).Address(False, False)
+        ws.Range("B2").Formula = "=SUM(" & rngYes & ")"
+        ws.Range("B3").Formula = "=IFERROR(B2*(DefaultHoursPerDay/DefaultHoursPerPoint),0)"
+    Else
+        ws.Range("B2").Value = 0
+        ws.Range("B3").Value = 0
+    End If
+
     ' Basic formatting (light)
     phase = "Format"
     ws.Range(ws.Cells(5, 1), ws.Cells(5, 3 + count)).Font.Bold = True
+    ws.Range(ws.Cells(5, 1), ws.Cells(5, 3 + count)).Interior.Color = RGB(217, 225, 242)
+    ' Title over member headers
+    With ws.Range(ws.Cells(4, 4), ws.Cells(4, 3 + count))
+        .Merge
+        .Value = "Squad Member Availability"
+        .HorizontalAlignment = -4108 ' xlCenter
+        .Font.Bold = True
+        .Interior.Color = RGB(217, 225, 242)
+        .Borders.Weight = 2
+    End With
+    ' Grid borders
+    With ws.Range(ws.Cells(5, 1), ws.Cells(row, 3 + count)).Borders
+        .LineStyle = 1
+        .Weight = 2
+    End With
+    ' Center availability cells
+    If count > 0 Then ws.Range(ws.Cells(6, 4), ws.Cells(row - 1, 3 + count)).HorizontalAlignment = -4108
+    ' Totals row emphasis
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 3 + count)).Font.Bold = True
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 3 + count)).Interior.Color = RGB(235, 241, 222)
+
     ws.Columns("A:A").ColumnWidth = 14
     ws.Columns("B:B").ColumnWidth = 8
     ws.Columns("C:C").ColumnWidth = 10
     ws.Columns("D:Z").ColumnWidth = 10
-    ws.Range("A5").Select
+    ' Freeze header row
+    ws.Range("A6").Select
+    ActiveWindow.FreezePanes = True
     If Not toHide Is Nothing Then toHide.Visible = 0 ' xlSheetHidden
     MsgBox "Availability sheet created: " & ws.Name, vbInformation
     Exit Sub
@@ -895,4 +965,95 @@ Public Sub DeleteOldConfigSheets()
     RemoveSheetIfExists "Config_Teams"
     RemoveSheetIfExists "Config_Sprints"
     MsgBox "Old config sheets removed (if present).", vbInformation
+End Sub
+
+' -------------------- Metrics sheet (skeleton) --------------------
+
+Public Sub BuildMetricsSkeleton()
+    On Error GoTo Fail
+    LogStart "BuildMetricsSkeleton"
+    EnsureMetricsSheet
+    LogOk "BuildMetricsSkeleton"
+    Exit Sub
+Fail:
+    LogErr "BuildMetricsSkeleton", "Err " & Err.Number & ": " & Err.Description
+    MsgBox "Metrics build failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub EnsureMetricsSheet()
+    Dim ws As Worksheet: Set ws = EnsureSheet("Metrics")
+    ' If table already exists, assume user has content and formatting—do not rebuild
+    If HasTable(ws, "tblMetrics") Then Exit Sub
+
+    ws.Cells.Clear
+
+    ' Headers
+    ws.Range("A1").Value = "Timeframe"
+    ws.Range("B1").Value = "Sprint"
+    ws.Range("C1").Value = "Days of Availability"
+    ws.Range("D1").Value = "Points Completed"
+    ws.Range("E1").Value = "Points Committed"
+    ws.Range("F1").Value = "Velocity Per Available Day"
+    ws.Range("G1").Value = "3-Sprint Average"
+    ws.Range("H1").Value = "Comments 1"
+    ws.Range("A1:H1").Font.Bold = True
+    ws.Range("A1:H1").Interior.Color = RGB(198, 239, 206)
+    ws.Range("A1:H1").Borders.Weight = 2
+
+    ' Create a table for easier entry/formatting
+    Dim lo As ListObject
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblMetrics")
+    On Error GoTo 0
+    If Not lo Is Nothing Then lo.Delete
+    Dim lastCol As Long: lastCol = 8
+    Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range(ws.Cells(1, 1), ws.Cells(2, lastCol)), , xlYes)
+    lo.Name = "tblMetrics"
+    lo.TableStyle = "TableStyleMedium2"
+
+    ' Pre-seed 32 sprint rows starting from current sprint
+    Dim yr As Integer, q As Integer, s As Integer
+    Dim tag As String: tag = FormatSprintTag(Date)
+    If Not ParseTagFromName(tag, yr, q, s) Then
+        yr = Year(Date): q = Int((Month(Date) - 1) / 3) + 1: s = 1
+    End If
+
+    Dim i As Long, r As Long: r = 2
+    For i = 1 To 32
+        Dim sStart As Date: sStart = QuarterStartDate(yr, q) + (s - 1) * 14
+        Dim sEnd As Date: sEnd = DateAdd("d", 13, sStart)
+        ws.Cells(r, 1).Value = Format$(sStart, "m/d") & " - " & Format$(sEnd, "m/d")
+        ws.Cells(r, 2).Value = yr & " Q" & q & " S" & s
+        ' F: Velocity per Day = Completed / Days
+        ws.Cells(r, 6).FormulaR1C1 = "=IFERROR(RC[-2]/RC[-3],0)"
+        ' G: 3-sprint moving average of F (including this row)
+        ' Show N/A until three rows exist; then average last 3 velocities
+        ws.Cells(r, 7).FormulaR1C1 = "=IF(ROW()<4,""N/A"",AVERAGE(R[-2]C[-1]:RC[-1]))"
+
+        ' advance sprint counters
+        s = s + 1
+        If s > 7 Then s = 1: q = q + 1: If q > 4 Then q = 1: yr = yr + 1
+        r = r + 1
+    Next i
+
+    ' Resize table over the filled rows
+    Dim lastRow As Long: lastRow = r - 1
+    lo.Resize ws.Range(ws.Cells(1, 1), ws.Cells(lastRow, lastCol))
+
+    ' Column widths similar to screenshot
+    ws.Columns("A").ColumnWidth = 16
+    ws.Columns("B").ColumnWidth = 12
+    ws.Columns("C").ColumnWidth = 18
+    ws.Columns("D").ColumnWidth = 16
+    ws.Columns("E").ColumnWidth = 16
+    ws.Columns("F").ColumnWidth = 22
+    ws.Columns("G").ColumnWidth = 16
+    ws.Columns("H").ColumnWidth = 24
+
+    ' Freeze header row
+    With ws
+        .Activate
+        .Range("A2").Select
+        ActiveWindow.FreezePanes = True
+    End With
 End Sub
