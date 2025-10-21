@@ -410,14 +410,32 @@ Private Function PickFile(ByVal title As String) As String
 End Function
 
 Private Sub LogEvent(ByVal action As String, ByVal outcome As String, ByVal details As String)
+    On Error GoTo SafeExit
+    Dim ws As Worksheet
+    Set ws = EnsureSheet("Logs")
+
     Dim lo As ListObject
-    Set lo = EnsureTable(EnsureSheet("Logs"), "tblLogs", Array("Timestamp", "User", "Action", "Outcome", "Details"))
-    Dim r As ListRow: Set r = lo.ListRows.Add
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblLogs")
+    On Error GoTo 0
+    If lo Is Nothing Then
+        On Error Resume Next
+        Set lo = EnsureTable(ws, "tblLogs", Array("Timestamp", "User", "Action", "Outcome", "Details"))
+        On Error GoTo 0
+    End If
+    If lo Is Nothing Then GoTo SafeExit
+
+    Dim r As ListRow
+    On Error Resume Next
+    Set r = lo.ListRows.Add
+    If r Is Nothing Then GoTo SafeExit
+    On Error GoTo 0
     r.Range(1, 1).Value = Now
     r.Range(1, 2).Value = Environ$("USERNAME")
     r.Range(1, 3).Value = action
     r.Range(1, 4).Value = outcome
     r.Range(1, 5).Value = details
+SafeExit:
 End Sub
 
 Private Function IsVerbose() As Boolean
