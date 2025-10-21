@@ -120,6 +120,11 @@ Private Sub SeedNamedValues()
     EnsureNamedValue "DefaultHoursPerPoint", ws.Range("H7"), 6
     EnsureNamedValue "RolesWithVelocity", ws.Range("H8"), "Developer,QA"
     EnsureNamedValue "VerboseLogging", ws.Range("H9"), True
+    ' Optional Jira settings for API integration
+    EnsureNamedValue "JiraBaseUrl", ws.Range("H10"), "https://your-domain.atlassian.net"
+    EnsureNamedValue "JiraEmail", ws.Range("H11"), ""
+    EnsureNamedValue "JiraApiToken", ws.Range("H12"), ""
+    EnsureNamedValue "JiraBoardId", ws.Range("H13"), ""
     WriteSettingsLabels ws
     WriteGettingStarted
     EnsureDashboard
@@ -254,6 +259,10 @@ Private Sub WriteSettingsLabels(ByVal ws As Worksheet)
     ws.Range("G7").Value = "DefaultHoursPerPoint"
     ws.Range("G8").Value = "RolesWithVelocity (comma list)"
     ws.Range("G9").Value = "VerboseLogging (TRUE/FALSE)"
+    ws.Range("G10").Value = "JiraBaseUrl (https://...atlassian.net)"
+    ws.Range("G11").Value = "JiraEmail (for API token)"
+    ws.Range("G12").Value = "JiraApiToken (keep secret)"
+    ws.Range("G13").Value = "JiraBoardId"
     ws.Columns("G:H").AutoFit
 End Sub
 
@@ -999,6 +1008,196 @@ Fail:
     LogErr "BuildMetricsSkeleton", "Err " & Err.Number & ": " & Err.Description
     MsgBox "Metrics build failed: " & Err.Description, vbExclamation
 End Sub
+
+' -------------------- Jira integration (basic) --------------------
+
+Public Sub Jira_PopulateMetrics()
+    On Error GoTo Fail
+    LogStart "Jira_PopulateMetrics"
+    Dim boardId As String: boardId = Trim$(GetNameValueOr("JiraBoardId", ""))
+    If Len(boardId) = 0 Then
+        boardId = InputBox("Enter Jira Board ID (rapidViewId):", "Jira Board Id")
+        If Len(boardId) = 0 Then Exit Sub
+    End If
+
+    Dim sprintsJson As String
+    sprintsJson = JiraHttpGet("/rest/agile/1.0/board/" & boardId & "/sprint?state=active,closed&maxResults=50")
+    If Len(sprintsJson) = 0 Then Err.Raise 1004, , "Could not read sprints from Jira"
+
+    Dim sprintIds() As Long, sprintStarts() As Date, sprintEnds() As Date, sprintCount As Long
+    Call JiraParseSprints(sprintsJson, sprintIds, sprintStarts, sprintEnds, sprintCount)
+    If sprintCount = 0 Then Err.Raise 1004, , "No sprints parsed from Jira response"
+
+    Dim i As Long
+    For i = 1 To sprintCount
+        Dim reportJson As String
+        reportJson = JiraHttpGet("/rest/greenhopper/1.0/rapid/charts/sprintreport?rapidViewId=" & boardId & "&sprintId=" & sprintIds(i))
+        If Len(reportJson) = 0 Then GoTo ContinueLoop
+
+        Dim committed As Double, completed As Double
+        committed = JiraExtractEstimate(reportJson, "completedIssuesInitialEstimateSum") + _
+                    JiraExtractEstimate(reportJson, "issuesNotCompletedInitialEstimateSum")
+        completed = JiraExtractEstimate(reportJson, "completedIssuesEstimateSum")
+
+        Call MetricsApplyJiraForSprint(sprintStarts(i), sprintEnds(i), committed, completed)
+ContinueLoop:
+    Next i
+
+    LogOk "Jira_PopulateMetrics"
+    MsgBox "Jira metrics populated into Metrics sheet (D/E columns).", vbInformation
+    Exit Sub
+Fail:
+    LogErr "Jira_PopulateMetrics", "Err " & Err.Number & ": " & Err.Description
+    MsgBox "Jira import failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub MetricsApplyJiraForSprint(ByVal sStart As Date, ByVal sEnd As Date, ByVal committed As Double, ByVal completed As Double)
+    Dim ws As Worksheet
+    Set ws = EnsureSheet("Metrics")
+    Dim lo As ListObject
+    On Error Resume Next: Set lo = ws.ListObjects("tblMetrics"): On Error GoTo 0
+    If lo Is Nothing Then Exit Sub
+
+    Dim tag As String: tag = FormatSprintTag(sStart)
+    Dim r As ListRow, found As Boolean
+    For Each r In lo.ListRows
+        Dim cSprint As String: cSprint = CStr(r.Range(1, 2).Value)
+        If StrComp(Trim$(cSprint), tag, vbTextCompare) = 0 Then
+            ' timeframe if empty
+            If Len(CStr(r.Range(1, 1).Value)) = 0 Then r.Range(1, 1).Value = Format$(sStart, "m/d") & " - " & Format$(sEnd, "m/d")
+            ' write points
+            r.Range(1, 4).Value = completed
+            r.Range(1, 5).Value = committed
+            found = True
+            Exit For
+        End If
+    Next r
+    If Not found Then
+        ' append a row to metrics table
+        Set r = lo.ListRows.Add
+        r.Range(1, 1).Value = Format$(sStart, "m/d") & " - " & Format$(sEnd, "m/d")
+        r.Range(1, 2).Value = tag
+        r.Range(1, 4).Value = completed
+        r.Range(1, 5).Value = committed
+    End If
+End Sub
+
+Private Function JiraHttpGet(ByVal path As String) As String
+    On Error GoTo Fail
+    Dim baseUrl As String: baseUrl = Trim$(GetNameValueOr("JiraBaseUrl", ""))
+    Dim email As String: email = Trim$(GetNameValueOr("JiraEmail", ""))
+    Dim token As String: token = Trim$(GetNameValueOr("JiraApiToken", ""))
+    If Len(baseUrl) = 0 Or Len(email) = 0 Or Len(token) = 0 Then Exit Function
+    If Right$(baseUrl, 1) = "/" Then baseUrl = Left$(baseUrl, Len(baseUrl) - 1)
+    Dim url As String: url = baseUrl & path
+
+    Dim http As Object
+    Set http = CreateObject("MSXML2.XMLHTTP")
+    http.Open "GET", url, False
+    http.setRequestHeader "Accept", "application/json"
+    http.setRequestHeader "Authorization", "Basic " & B64Encode(email & ":" & token)
+    http.send
+    If http.Status >= 200 And http.Status < 300 Then
+        JiraHttpGet = CStr(http.responseText)
+    End If
+    Exit Function
+Fail:
+    JiraHttpGet = ""
+End Function
+
+Private Sub JiraParseSprints(ByVal json As String, ByRef ids() As Long, ByRef starts() As Date, ByRef ends() As Date, ByRef outCount As Long)
+    ' Lightweight parser for /board/{id}/sprint listing (assumes fields id/startDate/endDate)
+    Dim p As Long: p = 1
+    Dim cap As Long: cap = 0
+    Do
+        Dim idx As Long: idx = InStr(p, json, "{""id"":")
+        If idx = 0 Then Exit Do
+        Dim idVal As Long: idVal = CLng(ParseNumberAfter(json, idx + 6))
+        Dim sStart As Date: sStart = ParseIsoDate(FindJsonString(json, idx, "startDate"))
+        Dim sEnd As Date: sEnd = ParseIsoDate(FindJsonString(json, idx, "endDate"))
+        cap = cap + 1
+        ReDim Preserve ids(1 To cap): ReDim Preserve starts(1 To cap): ReDim Preserve ends(1 To cap)
+        ids(cap) = idVal: starts(cap) = sStart: ends(cap) = sEnd
+        p = idx + 8
+    Loop
+    outCount = cap
+End Sub
+
+Private Function JiraExtractEstimate(ByVal json As String, ByVal key As String) As Double
+    Dim pat As String
+    pat = "\"" & key & "\":{""value"":" ' not real regex; just find start
+    Dim i As Long: i = InStr(1, json, "\"" & key & "\":{", vbTextCompare)
+    If i = 0 Then Exit Function
+    Dim j As Long: j = InStr(i, json, "\"value\":" , vbTextCompare)
+    If j = 0 Then Exit Function
+    JiraExtractEstimate = CDbl(ParseNumberAfter(json, j + 8))
+End Function
+
+Private Function ParseNumberAfter(ByVal s As String, ByVal pos As Long) As Double
+    Dim i As Long: i = pos
+    Do While i <= Len(s) And Mid$(s, i, 1) Like "[ \t\r\n:]"
+        i = i + 1
+    Loop
+    Dim j As Long: j = i
+    Do While j <= Len(s)
+        Dim ch As String: ch = Mid$(s, j, 1)
+        If Not (ch Like "[0-9.-]") Then Exit Do
+        j = j + 1
+    Loop
+    If j > i Then ParseNumberAfter = Val(Mid$(s, i, j - i))
+End Function
+
+Private Function FindJsonString(ByVal s As String, ByVal startAt As Long, ByVal key As String) As String
+    Dim i As Long: i = InStr(startAt, s, "\"" & key & "\":\"", vbTextCompare)
+    If i = 0 Then Exit Function
+    i = i + Len(key) + 4
+    Dim j As Long: j = InStr(i, s, "\"")
+    If j > i Then FindJsonString = Mid$(s, i, j - i)
+End Function
+
+Private Function ParseIsoDate(ByVal s As String) As Date
+    On Error Resume Next
+    If Len(s) = 0 Then Exit Function
+    Dim t As String: t = s
+    ' Expect formats like 2025-01-02T12:34:56.000+0000
+    Dim y As Integer, m As Integer, d As Integer
+    y = CInt(Left$(t, 4))
+    m = CInt(Mid$(t, 6, 2))
+    d = CInt(Mid$(t, 9, 2))
+    ParseIsoDate = DateSerial(y, m, d)
+End Function
+
+Private Function B64Encode(ByVal plain As String) As String
+    Dim bytes() As Byte: bytes = StrConv(plain, vbFromUnicode)
+    Dim out As String
+    Dim enc As String: enc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    Dim i As Long
+    For i = 0 To UBound(bytes) Step 3
+        Dim b0 As Long, b1 As Long, b2 As Long, n As Long
+        b0 = bytes(i)
+        If i + 1 <= UBound(bytes) Then b1 = bytes(i + 1) Else b1 = -1
+        If i + 2 <= UBound(bytes) Then b2 = bytes(i + 2) Else b2 = -1
+        If b1 >= 0 And b2 >= 0 Then
+            n = (b0 And &HFF) * &H10000 + (b1 And &HFF) * &H100 + (b2 And &HFF)
+            out = out & Mid$(enc, (n \ &H40000) + 1, 1)
+            out = out & Mid$(enc, ((n And &H3F000) \ &H1000) + 1, 1)
+            out = out & Mid$(enc, ((n And &HFC0) \ &H40) + 1, 1)
+            out = out & Mid$(enc, (n And &H3F) + 1, 1)
+        ElseIf b1 >= 0 Then
+            n = (b0 And &HFF) * &H100 + (b1 And &HFF)
+            out = out & Mid$(enc, ((n And &HFC00) \ &H400) + 1, 1)
+            out = out & Mid$(enc, ((n And &H3F0) \ &H10) + 1, 1)
+            out = out & Mid$(enc, ((n And &HF) * 4) + 1, 1)
+            out = out & "="
+        Else
+            n = (b0 And &HFF)
+            out = out & Mid$(enc, ((n And &HF0) \ &H10) + 1, 1)
+            out = out & Mid$(enc, ((n And &HF) * 4) + 1, 1)
+            out = out & "=="
+        End If
+    Next i
+    B64Encode = out
+End Function
 
 Private Sub EnsureMetricsSheet()
     Dim ws As Worksheet: Set ws = EnsureSheet("Metrics")
