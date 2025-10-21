@@ -209,11 +209,13 @@ Private Function NextFreeRow(ByVal ws As Worksheet) As Long
     If bottom > 0 Then r = bottom + 2
 
     Dim usedBottom As Long
-    If Not ws.UsedRange Is Nothing Then
-        usedBottom = ws.UsedRange.Row + ws.UsedRange.Rows.Count - 1
-        If usedBottom >= r Then r = usedBottom + 2
-    End If
+    ' UsedRange always returns a range; compute its bottom row
+    usedBottom = ws.UsedRange.Row + ws.UsedRange.Rows.Count - 1
+    If usedBottom >= r Then r = usedBottom + 2
+
+    ' Clamp to sheet bounds; if last cell glitch pushes us past the bottom, restart at top
     If r < 1 Then r = 1
+    If r > ws.Rows.Count - 5 Then r = 1
     NextFreeRow = r
 End Function
 
