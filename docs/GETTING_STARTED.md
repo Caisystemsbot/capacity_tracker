@@ -7,6 +7,7 @@ Steps
 - Alt+F11 → Insert → Module → paste the contents of `src/modules/modCapacityPlanner.bas`.
 - Run `Bootstrap`.
 - Open sheet `Getting_Started` and follow the checklist:
+- Visit the `Dashboard` sheet; use the single "Create/Advance Availability" button to create the availability grid for the selected sprint.
 - Fill `Config_Teams` → `tblRoster` with your team. Columns:
   - `Member` (person’s name)
   - `Role` (dropdown: QA, Developer, Analyst, Squad Leader, Project Manager)
