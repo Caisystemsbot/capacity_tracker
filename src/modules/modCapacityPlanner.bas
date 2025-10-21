@@ -491,24 +491,29 @@ Private Sub EnsureDashboard()
     Dim btn2 As Button
     Set btn2 = ws.Buttons.Add(Left:=20, Top:=80, Width:=240, Height:=28)
     btn2.Name = "btnAdvanceAvailability"
-    btn2.OnAction = "modCapacityPlanner.CreateOrAdvanceAvailability"
+    ' Use simple macro name for reliability in pasted modules
+    btn2.OnAction = "CreateOrAdvanceAvailability"
     btn2.Characters.Text = "Create/Advance Availability"
 End Sub
 
 Public Sub CreateTeamAvailability()
     On Error GoTo Fail
+    LogStart "CreateTeamAvailability"
     Dim yr As Integer, q As Integer, s As Integer
     If Not PromptForQuarterSprint(yr, q, s) Then Exit Sub
     Dim sStart As Date: sStart = QuarterStartDate(yr, q) + (s - 1) * 14
 
     CreateTeamAvailabilityAtDate sStart, Nothing
+    LogOk "CreateTeamAvailability"
     Exit Sub
 Fail:
+    LogErr "CreateTeamAvailability", "Err " & Err.Number & " (Erl=" & Erl & "): " & Err.Description
     MsgBox "CreateTeamAvailability failed: " & Err.Description, vbExclamation
 End Sub
 
 Public Sub CreateOrAdvanceAvailability()
     On Error GoTo Fail
+    LogStart "CreateOrAdvanceAvailability"
     Dim last As Worksheet: Set last = FindLatestAvailability()
     If last Is Nothing Then
         ' none exists → prompt
@@ -531,19 +536,25 @@ Public Sub CreateOrAdvanceAvailability()
     End If
     Dim nextStart As Date: nextStart = DateAdd("d", 14, lastStart)
     CreateTeamAvailabilityAtDate nextStart, last
+    LogOk "CreateOrAdvanceAvailability"
     Exit Sub
 Fail:
+    LogErr "CreateOrAdvanceAvailability", "Err " & Err.Number & " (Erl=" & Erl & "): " & Err.Description
     MsgBox "CreateOrAdvanceAvailability failed: " & Err.Description, vbExclamation
 End Sub
 
 Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As Worksheet)
+    On Error GoTo Fail
+    Dim phase As String
     Dim sheetName As String
     sheetName = FormatSprintTag(sStart) & " Team Availability"
     Dim ws As Worksheet
+    phase = "AddSheet"
     Set ws = Worksheets.Add(After:=Worksheets(Worksheets.Count))
     ws.Name = NextUniqueName(sheetName)
 
     Dim members As Variant, roles As Variant, contrib As Variant
+    phase = "ReadRoster"
     members = GetRosterColumn("Member")
     roles = GetRosterColumn("Role")
     contrib = GetRosterColumn("ContributesToVelocity")
@@ -554,9 +565,11 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
 
     ' Build ordered index: contributors first, grouped by role
     Dim order() As Long, count As Long, yesCount As Long
+    phase = "BuildOrder"
     order = BuildRosterOrder(members, contrib, roles, count, yesCount)
 
     ' Headers
+    phase = "WriteHeaders"
     ws.Range("A5").Value = "Day of Week"
     ws.Range("B5").Value = "Date"
     ws.Range("C5").Value = "Sprint Day"
@@ -575,6 +588,7 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
     Dim targetDays As Long: targetDays = CLng(GetNameValueOr("SprintLengthDays", "10"))
     Dim dayIndex As Long, row As Long: row = 6
     Dim sprintDay As Long: sprintDay = 0
+    phase = "FillDays"
     For dayIndex = 0 To 13
         Dim d As Date: d = sStart + dayIndex
         ws.Cells(row, 1).Value = Format$(d, "dddd")
@@ -596,12 +610,14 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
     Next dayIndex
 
     ' Totals row
+    phase = "Totals"
     ws.Cells(row, 1).Value = "Total Days"
     For col = 4 To 3 + count
         ws.Cells(row, col).FormulaR1C1 = "=SUM(R[-14]C:R[-1]C)"
     Next col
 
     ' Basic formatting (light)
+    phase = "Format"
     ws.Range(ws.Cells(5, 1), ws.Cells(5, 3 + count)).Font.Bold = True
     ws.Columns("A:A").ColumnWidth = 14
     ws.Columns("B:B").ColumnWidth = 8
@@ -610,6 +626,10 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
     ws.Range("A5").Select
     If Not toHide Is Nothing Then toHide.Visible = 0 ' xlSheetHidden
     MsgBox "Availability sheet created: " & ws.Name, vbInformation
+    Exit Sub
+Fail:
+    LogErr "CreateTeamAvailabilityAtDate", "Phase=" & phase & "; Err " & Err.Number & " (Erl=" & Erl & "): " & Err.Description
+    Err.Raise Err.Number, , Err.Description
 End Sub
 
 Private Function FormatSprintTag(ByVal startDate As Date) As String
