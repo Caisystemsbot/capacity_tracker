@@ -832,17 +832,26 @@ Private Function BuildRosterOrder(ByVal members As Variant, ByVal contrib As Var
     For i = 1 To n
         Dim isYes As Boolean: isYes = False
         Dim c As String: c = ""
-        If Not IsEmpty(contrib) Then If i <= UBound(contrib) Then c = CStr(contrib(i))
+        If Not IsEmpty(contrib) Then
+            If i <= UBound(contrib) Then c = CStr(contrib(i))
+        End If
         If UCase$(Left$(Trim$(c), 1)) = "Y" Then isYes = True
 
         Dim r As String: r = ""
-        If Not IsEmpty(roles) Then If i <= UBound(roles) Then r = UCase$(NormalizeRole(CStr(roles(i))))
+        If Not IsEmpty(roles) Then
+            If i <= UBound(roles) Then r = UCase$(NormalizeRole(CStr(roles(i))))
+        End If
 
-        If isYes And r = "DEVELOPER" Then cd = cd + 1: devY(cd) = i
-        ElseIf isYes And r = "QA" Then cq = cq + 1: qaY(cq) = i
-        ElseIf Not isYes And r = "ANALYST" Then ca = ca + 1: anaN(ca) = i
-        ElseIf Not isYes And r = "SQUAD LEADER" Then cs = cs + 1: slN(cs) = i
-        ElseIf Not isYes And (r = "PROJECT MANAGER" Or r = "PROJECT MANAGER (SCRUM MASTER)") Then cp = cp + 1: pmN(cp) = i
+        If isYes And r = "DEVELOPER" Then
+            cd = cd + 1: devY(cd) = i
+        ElseIf isYes And r = "QA" Then
+            cq = cq + 1: qaY(cq) = i
+        ElseIf Not isYes And r = "ANALYST" Then
+            ca = ca + 1: anaN(ca) = i
+        ElseIf Not isYes And r = "SQUAD LEADER" Then
+            cs = cs + 1: slN(cs) = i
+        ElseIf Not isYes And (r = "PROJECT MANAGER" Or r = "PROJECT MANAGER (SCRUM MASTER)") Then
+            cp = cp + 1: pmN(cp) = i
         Else
             co = co + 1: other(co) = i
         End If
