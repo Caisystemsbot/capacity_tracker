@@ -584,6 +584,12 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
         col = col + 1
     Next i
 
+    ' Top-left metrics placeholders
+    ws.Range("A1").Value = "Average Velocity per Available Day"
+    ws.Range("B1").Value = 0
+    ws.Range("A2").Value = "Available Days"
+    ws.Range("A3").Value = "Full Capacity Points"
+
     ' Fill 14 calendar days starting at sprint start
     Dim targetDays As Long: targetDays = CLng(GetNameValueOr("SprintLengthDays", "10"))
     Dim dayIndex As Long, row As Long: row = 6
@@ -615,6 +621,17 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
     For col = 4 To 3 + count
         ws.Cells(row, col).FormulaR1C1 = "=SUM(R[-14]C:R[-1]C)"
     Next col
+
+    ' Bind metrics block to contributor columns (Developer + QA first)
+    If yesCount > 0 Then
+        Dim rngYes As String
+        rngYes = ws.Range(ws.Cells(row, 4), ws.Cells(row, 3 + yesCount)).Address(False, False)
+        ws.Range("B2").Formula = "=SUM(" & rngYes & ")"
+        ws.Range("B3").Formula = "=IFERROR(B2*(DefaultHoursPerDay/DefaultHoursPerPoint),0)"
+    Else
+        ws.Range("B2").Value = 0
+        ws.Range("B3").Value = 0
+    End If
 
     ' Basic formatting (light)
     phase = "Format"
@@ -895,4 +912,91 @@ Public Sub DeleteOldConfigSheets()
     RemoveSheetIfExists "Config_Teams"
     RemoveSheetIfExists "Config_Sprints"
     MsgBox "Old config sheets removed (if present).", vbInformation
+End Sub
+
+' -------------------- Metrics sheet (skeleton) --------------------
+
+Public Sub BuildMetricsSkeleton()
+    On Error GoTo Fail
+    LogStart "BuildMetricsSkeleton"
+    EnsureMetricsSheet
+    LogOk "BuildMetricsSkeleton"
+    Exit Sub
+Fail:
+    LogErr "BuildMetricsSkeleton", "Err " & Err.Number & ": " & Err.Description
+    MsgBox "Metrics build failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub EnsureMetricsSheet()
+    Dim ws As Worksheet: Set ws = EnsureSheet("Metrics")
+    ws.Cells.Clear
+
+    ' Headers
+    ws.Range("A1").Value = "Timeframe"
+    ws.Range("B1").Value = "Sprint"
+    ws.Range("C1").Value = "Days of Availability"
+    ws.Range("D1").Value = "Points Completed"
+    ws.Range("E1").Value = "Points Committed"
+    ws.Range("F1").Value = "Velocity Per Available Day"
+    ws.Range("G1").Value = "3-Sprint Average"
+    ws.Range("H1").Value = "Comments 1"
+    ws.Range("A1:H1").Font.Bold = True
+    ws.Range("A1:H1").Interior.Color = RGB(198, 239, 206)
+    ws.Range("A1:H1").Borders.Weight = 2
+
+    ' Create a table for easier entry/formatting
+    Dim lo As ListObject
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblMetrics")
+    On Error GoTo 0
+    If Not lo Is Nothing Then lo.Delete
+    Dim lastCol As Long: lastCol = 8
+    Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range(ws.Cells(1, 1), ws.Cells(2, lastCol)), , xlYes)
+    lo.Name = "tblMetrics"
+    lo.TableStyle = "TableStyleMedium2"
+
+    ' Pre-seed 32 sprint rows starting from current sprint
+    Dim yr As Integer, q As Integer, s As Integer
+    Dim tag As String: tag = FormatSprintTag(Date)
+    If Not ParseTagFromName(tag, yr, q, s) Then
+        yr = Year(Date): q = Int((Month(Date) - 1) / 3) + 1: s = 1
+    End If
+
+    Dim i As Long, r As Long: r = 2
+    For i = 1 To 32
+        Dim sStart As Date: sStart = QuarterStartDate(yr, q) + (s - 1) * 14
+        Dim sEnd As Date: sEnd = DateAdd("d", 13, sStart)
+        ws.Cells(r, 1).Value = Format$(sStart, "m/d") & " - " & Format$(sEnd, "m/d")
+        ws.Cells(r, 2).Value = yr & " Q" & q & " S" & s
+        ' F: Velocity per Day = Completed / Days
+        ws.Cells(r, 6).FormulaR1C1 = "=IFERROR(RC[-2]/RC[-3],0)"
+        ' G: 3-sprint moving average of F (including this row)
+        ws.Cells(r, 7).FormulaR1C1 = "=IFERROR(AVERAGE(R[-2]C[-1]:R[0]C[-1]),\"N/A\")"
+
+        ' advance sprint counters
+        s = s + 1
+        If s > 7 Then s = 1: q = q + 1: If q > 4 Then q = 1: yr = yr + 1
+        r = r + 1
+    Next i
+
+    ' Resize table over the filled rows
+    Dim lastRow As Long: lastRow = r - 1
+    lo.Resize ws.Range(ws.Cells(1, 1), ws.Cells(lastRow, lastCol))
+
+    ' Column widths similar to screenshot
+    ws.Columns("A").ColumnWidth = 16
+    ws.Columns("B").ColumnWidth = 12
+    ws.Columns("C").ColumnWidth = 18
+    ws.Columns("D").ColumnWidth = 16
+    ws.Columns("E").ColumnWidth = 16
+    ws.Columns("F").ColumnWidth = 22
+    ws.Columns("G").ColumnWidth = 16
+    ws.Columns("H").ColumnWidth = 24
+
+    ' Freeze header row
+    With ws
+        .Activate
+        .Range("A2").Select
+        ActiveWindow.FreezePanes = True
+    End With
 End Sub
