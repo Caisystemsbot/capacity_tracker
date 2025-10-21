@@ -1009,7 +1009,8 @@ Private Sub EnsureMetricsSheet()
         ' F: Velocity per Day = Completed / Days
         ws.Cells(r, 6).FormulaR1C1 = "=IFERROR(RC[-2]/RC[-3],0)"
         ' G: 3-sprint moving average of F (including this row)
-        ws.Cells(r, 7).FormulaR1C1 = "=IFERROR(AVERAGE(R[-2]C[-1]:R[0]C[-1]),\"N/A\")"
+        ' Show N/A until three rows exist; then average last 3 velocities
+        ws.Cells(r, 7).FormulaR1C1 = "=IF(ROW()<4,\"N/A\",AVERAGE(R[-2]C[-1]:RC[-1]))"
 
         ' advance sprint counters
         s = s + 1
