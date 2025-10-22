@@ -20,7 +20,7 @@ Public Sub Bootstrap()
     Step_SeedSamplesIfPresent
 
     Application.ScreenUpdating = True
-    MsgBox "Bootstrap complete.", vbInformation
+    If IsVerbose() Then MsgBox "Bootstrap complete.", vbInformation
     LogOk "Bootstrap"
     Exit Sub
 Fail:
@@ -99,6 +99,8 @@ Private Sub EnsureSheets()
     ' Ensure Metrics sheet exists (build skeleton once)
     Dim m As Worksheet: Set m = EnsureSheet("Metrics")
     If Not HasTable(m, "tblMetrics") Then EnsureMetricsSheet
+    ' Provide a baked-in sample issues sheet for analysis (no macro needed)
+    EnsureSampleIssuesSheet
 End Sub
 
 Private Sub EnsureTables()
@@ -106,8 +108,7 @@ Private Sub EnsureTables()
     Set ws = EnsureConfig()
     EnsureRosterTable ws
 
-    Set ws = EnsureSheet("Logs")
-    EnsureTable ws, "tblLogs", Array("Timestamp", "User", "Action", "Outcome", "Details")
+    Call EnsureSheetTable("Logs", "tblLogs", Array("Timestamp", "User", "Action", "Outcome", "Details"))
 End Sub
 
 Private Sub SeedNamedValues()
@@ -120,11 +121,6 @@ Private Sub SeedNamedValues()
     EnsureNamedValue "DefaultHoursPerPoint", ws.Range("H7"), 6
     EnsureNamedValue "RolesWithVelocity", ws.Range("H8"), "Developer,QA"
     EnsureNamedValue "VerboseLogging", ws.Range("H9"), True
-    ' Optional Jira settings for API integration
-    EnsureNamedValue "JiraBaseUrl", ws.Range("H10"), "https://your-domain.atlassian.net"
-    EnsureNamedValue "JiraEmail", ws.Range("H11"), ""
-    EnsureNamedValue "JiraApiToken", ws.Range("H12"), ""
-    EnsureNamedValue "JiraBoardId", ws.Range("H13"), ""
     WriteSettingsLabels ws
     WriteGettingStarted
     EnsureDashboard
@@ -259,10 +255,6 @@ Private Sub WriteSettingsLabels(ByVal ws As Worksheet)
     ws.Range("G7").Value = "DefaultHoursPerPoint"
     ws.Range("G8").Value = "RolesWithVelocity (comma list)"
     ws.Range("G9").Value = "VerboseLogging (TRUE/FALSE)"
-    ws.Range("G10").Value = "JiraBaseUrl (https://...atlassian.net)"
-    ws.Range("G11").Value = "JiraEmail (for API token)"
-    ws.Range("G12").Value = "JiraApiToken (keep secret)"
-    ws.Range("G13").Value = "JiraBoardId"
     ws.Columns("G:H").AutoFit
 End Sub
 
@@ -424,14 +416,7 @@ Private Sub LogEvent(ByVal action As String, ByVal outcome As String, ByVal deta
     Set ws = EnsureSheet("Logs")
 
     Dim lo As ListObject
-    On Error Resume Next
-    Set lo = ws.ListObjects("tblLogs")
-    On Error GoTo 0
-    If lo Is Nothing Then
-        On Error Resume Next
-        Set lo = EnsureTable(ws, "tblLogs", Array("Timestamp", "User", "Action", "Outcome", "Details"))
-        On Error GoTo 0
-    End If
+    Set lo = EnsureSheetTable("Logs", "tblLogs", Array("Timestamp", "User", "Action", "Outcome", "Details"))
     If lo Is Nothing Then GoTo SafeExit
 
     Dim r As ListRow
@@ -485,6 +470,15 @@ Private Function HasTable(ByVal ws As Worksheet, ByVal tableName As String) As B
     On Error Resume Next
     HasTable = Not ws.ListObjects(tableName) Is Nothing
     On Error GoTo 0
+End Function
+
+Private Function EnsureSheetTable(ByVal sheetName As String, ByVal tableName As String, ByVal headers As Variant) As ListObject
+    Dim ws As Worksheet
+    Set ws = EnsureSheet(sheetName)
+    Dim lo As ListObject
+    On Error Resume Next: Set lo = ws.ListObjects(tableName): On Error GoTo 0
+    If lo Is Nothing Then Set lo = EnsureTable(ws, tableName, headers)
+    Set EnsureSheetTable = lo
 End Function
 
 Private Sub LogStart(ByVal action As String, Optional ByVal details As String = "")
@@ -724,7 +718,7 @@ Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As W
     ws.Range("A6").Select
     ActiveWindow.FreezePanes = True
     If Not toHide Is Nothing Then toHide.Visible = 0 ' xlSheetHidden
-    MsgBox "Availability sheet created: " & ws.Name, vbInformation
+    If IsVerbose() Then MsgBox "Availability sheet created: " & ws.Name, vbInformation
     Exit Sub
 Fail:
     LogErr "CreateTeamAvailabilityAtDate", "Phase=" & phase & "; Err " & Err.Number & " (Erl=" & Erl & "): " & Err.Description
@@ -1012,43 +1006,359 @@ End Sub
 ' -------------------- Jira integration (basic) --------------------
 
 Public Sub Jira_PopulateMetrics()
+    ' Token-based API is not used. Build Power Query web queries instead
     On Error GoTo Fail
     LogStart "Jira_PopulateMetrics"
-    Dim boardId As String: boardId = Trim$(GetNameValueOr("JiraBoardId", ""))
-    If Len(boardId) = 0 Then
-        boardId = InputBox("Enter Jira Board ID (rapidViewId):", "Jira Board Id")
-        If Len(boardId) = 0 Then Exit Sub
-    End If
-
-    Dim sprintsJson As String
-    sprintsJson = JiraHttpGet("/rest/agile/1.0/board/" & boardId & "/sprint?state=active,closed&maxResults=50")
-    If Len(sprintsJson) = 0 Then Err.Raise 1004, , "Could not read sprints from Jira"
-
-    Dim sprintIds() As Long, sprintStarts() As Date, sprintEnds() As Date, sprintCount As Long
-    Call JiraParseSprints(sprintsJson, sprintIds, sprintStarts, sprintEnds, sprintCount)
-    If sprintCount = 0 Then Err.Raise 1004, , "No sprints parsed from Jira response"
-
-    Dim i As Long
-    For i = 1 To sprintCount
-        Dim reportJson As String
-        reportJson = JiraHttpGet("/rest/greenhopper/1.0/rapid/charts/sprintreport?rapidViewId=" & boardId & "&sprintId=" & sprintIds(i))
-        If Len(reportJson) = 0 Then GoTo ContinueLoop
-
-        Dim committed As Double, completed As Double
-        committed = JiraExtractEstimate(reportJson, "completedIssuesInitialEstimateSum") + _
-                    JiraExtractEstimate(reportJson, "issuesNotCompletedInitialEstimateSum")
-        completed = JiraExtractEstimate(reportJson, "completedIssuesEstimateSum")
-
-        Call MetricsApplyJiraForSprint(sprintStarts(i), sprintEnds(i), committed, completed)
-ContinueLoop:
-    Next i
-
+    Jira_CreateQueries
+    ThisWorkbook.RefreshAll
+    ' After refresh, if Jira_Metrics sheet exists, apply into Metrics table
+    Jira_ApplyMetricsFromQuery
     LogOk "Jira_PopulateMetrics"
-    MsgBox "Jira metrics populated into Metrics sheet (D/E columns).", vbInformation
+    If IsVerbose() Then MsgBox "Jira queries created/refreshed. Metrics updated from Jira_Metrics.", vbInformation
     Exit Sub
 Fail:
     LogErr "Jira_PopulateMetrics", "Err " & Err.Number & ": " & Err.Description
     MsgBox "Jira import failed: " & Err.Description, vbExclamation
+End Sub
+
+' -------------------- Jira issues analysis (mock + normalize) --------------------
+
+Public Sub Jira_BuildSampleIssues()
+    Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Issues_Sample")
+    ws.Cells.Clear
+    Dim headers As Variant
+    headers = Array("Summary","Issue key","Issue id","Issue Type","Status","Created","Resolved","Fix Version/s","Custom field (Epic Link)","Custom field (Story Points)")
+    Dim i As Long
+    For i = LBound(headers) To UBound(headers)
+        ws.Cells(1, i + 1).Value = headers(i)
+    Next i
+    Dim r As Long: r = 2
+    Call W(ws, r, Array("Onboard Tools", "FIINT-4000", 330001, "Story", "Done", #9/10/2025#, #9/23/2025#, "2025.09.23", "EPIC-100", 3)): r = r + 1
+    Call W(ws, r, Array("Automation Cleanup", "FIINT-4010", 330010, "Story", "Done", #9/25/2025#, #10/7/2025#, "2025.10.07", "EPIC-100", 5)): r = r + 1
+    Call W(ws, r, Array("Improve Logs", "FIINT-4020", 330020, "Task", "In Progress", #10/8/2025#, "", "2025.10.21", "EPIC-120", 2)): r = r + 1
+    Call W(ws, r, Array("Release Steps", "FIINT-4071", 333071, "Story", "Done", #9/21/2025#, #10/15/2025#, "2025.10.15", "EPIC-140", 3)): r = r + 1
+    ws.Rows(1).Font.Bold = True
+    Dim lo As ListObject
+    On Error Resume Next: Set lo = ws.ListObjects("tblJiraIssuesSample"): On Error GoTo 0
+    If Not lo Is Nothing Then lo.Delete
+    Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range("A1").CurrentRegion, , xlYes)
+    lo.Name = "tblJiraIssuesSample"
+End Sub
+
+Private Sub W(ws As Worksheet, ByVal r As Long, ByVal arr As Variant)
+    Dim c As Long
+    For c = LBound(arr) To UBound(arr)
+        ws.Cells(r, c + 1).Value = arr(c)
+    Next c
+End Sub
+
+Public Sub Jira_NormalizeIssues_FromSample()
+    Jira_NormalizeIssues "Jira_Issues_Sample", "tblJiraIssuesSample"
+End Sub
+
+Private Sub EnsureSampleIssuesSheet()
+    Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Issues_Sample")
+    Dim lo As ListObject
+    On Error Resume Next: Set lo = ws.ListObjects("tblJiraIssuesSample"): On Error GoTo 0
+    If Not lo Is Nothing Then
+        If lo.ListRows.Count >= 40 Then Exit Sub ' already populated
+    End If
+    ws.Cells.Clear
+    Dim headers As Variant
+    headers = Array("Summary","Issue key","Issue id","Issue Type","Status","Created","Resolved","Fix Version/s","Custom field (Epic Link)","Custom field (Story Points)")
+    Dim i As Long
+    For i = LBound(headers) To UBound(headers)
+        ws.Cells(1, i + 1).Value = headers(i)
+    Next i
+    Dim base As Date: base = DateSerial(2025, 9, 10)
+    Dim ep As Long, sp As Variant, t As String, st As String
+    Dim r As Long: r = 2
+    For i = 1 To 40
+        t = IIf(i Mod 10 = 0, "Bug", IIf(i Mod 5 = 0, "Task", "Story"))
+        st = IIf(i Mod 7 = 0, "To Do", IIf(i Mod 3 = 0, "In Progress", "Done"))
+        ep = 100 + ((i - 1) Mod 6)
+        sp = Choose(((i - 1) Mod 6) + 1, 1, 2, 3, 5, 8, 13)
+        Dim created As Date: created = base + ((i - 1) * 2 Mod 42)
+        Dim resolved As Variant
+        If st = "Done" Then
+            resolved = created + (sp * 2 + (i Mod 3))
+        Else
+            resolved = ""
+        End If
+        Dim fixv As String
+        If Month(created) = 9 Then
+            fixv = "2025.09.23"
+        ElseIf Month(created) = 10 Then
+            fixv = "2025.10.07"
+        Else
+            fixv = "2025.10.21"
+        End If
+        Call W(ws, r, Array( _
+            "Sample Work Item " & i, _
+            "FIINT-" & CStr(4000 + i), _
+            330000 + i * 10, _
+            t, _
+            st, _
+            created, _
+            resolved, _
+            fixv, _
+            "EPIC-" & ep, _
+            sp))
+        r = r + 1
+    Next i
+    ws.Rows(1).Font.Bold = True
+    Set lo = Nothing
+    On Error Resume Next: Set lo = ws.ListObjects("tblJiraIssuesSample"): On Error GoTo 0
+    If Not lo Is Nothing Then lo.Delete
+    Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range("A1").CurrentRegion, , xlYes)
+    lo.Name = "tblJiraIssuesSample"
+End Sub
+
+Public Sub Jira_NormalizeIssues(ByVal rawSheet As String, ByVal rawTable As String)
+    On Error GoTo Fail
+    Dim wsRaw As Worksheet: Set wsRaw = Worksheets(rawSheet)
+    Dim loRaw As ListObject: Set loRaw = wsRaw.ListObjects(rawTable)
+    Dim map As Object: Set map = Jira_BuildHeaderMap(loRaw)
+    If map Is Nothing Then Err.Raise 1004, , "Could not map required Jira columns"
+
+    Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Facts")
+    Dim lo As ListObject
+    On Error Resume Next: Set lo = ws.ListObjects("tblJiraFacts"): On Error GoTo 0
+    If lo Is Nothing Then
+        Dim headers As Variant
+        headers = Array("IssueKey","Summary","IssueType","Status","Epic","Created","Resolved","StoryPoints","CycleDays","SprintSpan","IsCrossSprint","QuarterTag","YearTag")
+        Set lo = EnsureTable(ws, "tblJiraFacts", headers)
+    Else
+        If Not lo.DataBodyRange Is Nothing Then lo.DataBodyRange.ClearContents
+    End If
+
+    Dim r As ListRow, out As ListRow
+    Dim created As Date, resolved As Date, d As Double, span As Long, sp As Double
+    Dim sprintLen As Long: sprintLen = CLng(Val(GetNameValueOr("SprintLengthDays", "10")))
+    For Each r In loRaw.ListRows
+        Set out = lo.ListRows.Add
+        out.Range(1, 1).Value = GetCellBy(loRaw, r, map, "IssueKey")
+        out.Range(1, 2).Value = GetCellBy(loRaw, r, map, "Summary")
+        out.Range(1, 3).Value = GetCellBy(loRaw, r, map, "IssueType")
+        out.Range(1, 4).Value = GetCellBy(loRaw, r, map, "Status")
+        out.Range(1, 5).Value = GetCellBy(loRaw, r, map, "Epic")
+        created = ToDateSafe(GetCellBy(loRaw, r, map, "Created"))
+        out.Range(1, 6).Value = created
+        resolved = ToDateSafe(GetCellBy(loRaw, r, map, "Resolved"))
+        out.Range(1, 7).Value = resolved
+        sp = Val(GetCellBy(loRaw, r, map, "StoryPoints"))
+        out.Range(1, 8).Value = sp
+        d = WorkdaysBetween(created, IIf(resolved = 0, Date, resolved))
+        out.Range(1, 9).Value = d
+        span = Application.WorksheetFunction.RoundUp(d / sprintLen, 0)
+        out.Range(1, 10).Value = span
+        out.Range(1, 11).Value = (span > 1)
+        Dim refDate As Date: refDate = IIf(resolved = 0, created, resolved)
+        out.Range(1, 12).Value = Year(refDate) & " Q" & Int((Month(refDate) - 1) / 3 + 1)
+        out.Range(1, 13).Value = Year(refDate)
+    Next r
+
+    If IsVerbose() Then MsgBox "Jira facts built from " & rawTable & ".", vbInformation
+    Exit Sub
+Fail:
+    MsgBox "Normalize issues failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Function Jira_BuildHeaderMap(ByVal lo As ListObject) As Object
+    Dim idx As Object: Set idx = CreateObject("Scripting.Dictionary")
+    Dim names As Object: Set names = CreateObject("Scripting.Dictionary")
+    Dim i As Long
+    For i = 1 To lo.ListColumns.Count
+        names(Norm(lo.ListColumns(i).Name)) = i
+    Next i
+    ' map keys
+    Call MapCol(idx, names, "IssueKey", Array("issue key","key"))
+    Call MapCol(idx, names, "Summary", Array("summary","title"))
+    Call MapCol(idx, names, "IssueType", Array("issue type","type"))
+    Call MapCol(idx, names, "Status", Array("status"))
+    Call MapCol(idx, names, "Epic", Array("epic link","epic"))
+    Call MapCol(idx, names, "Created", Array("created","created date","created on"))
+    Call MapCol(idx, names, "Resolved", Array("resolved","resolved date","done date"))
+    Call MapCol(idx, names, "StoryPoints", Array("story points","story point","story point estimate","custom field (story points)"))
+    If idx.Count = 0 Then Set idx = Nothing
+    Set Jira_BuildHeaderMap = idx
+End Function
+
+Private Sub MapCol(ByVal idx As Object, ByVal names As Object, ByVal key As String, ByVal candidates As Variant)
+    Dim j As Long
+    For j = LBound(candidates) To UBound(candidates)
+        Dim k As String: k = Norm(CStr(candidates(j)))
+        Dim col As Variant
+        col = FindByContains(names, k)
+        If Not IsEmpty(col) Then idx(key) = CLng(col): Exit Sub
+    Next j
+End Sub
+
+Private Function FindByContains(ByVal names As Object, ByVal needle As String) As Variant
+    Dim k As Variant
+    For Each k In names.Keys
+        If InStr(1, k, needle, vbTextCompare) > 0 Then
+            FindByContains = names(k): Exit Function
+        End If
+    Next k
+End Function
+
+Private Function Norm(ByVal s As String) As String
+    s = LCase$(Trim$(s))
+    s = Replace$(s, "_", " ")
+    s = Replace$(s, "/", " ")
+    s = Replace$(s, "-", " ")
+    s = Replace$(s, "(" , " ")
+    s = Replace$(s, ")" , " ")
+    s = Replace$(s, ":" , " ")
+    s = Application.WorksheetFunction.Trim(s)
+    Norm = s
+End Function
+
+Private Function GetCellBy(ByVal lo As ListObject, ByVal r As ListRow, ByVal map As Object, ByVal key As String) As String
+    On Error Resume Next
+    Dim idx As Long: idx = map(key)
+    If idx > 0 Then GetCellBy = CStr(r.Range(1, idx).Value)
+End Function
+
+Private Function ToDateSafe(ByVal v As Variant) As Date
+    On Error Resume Next
+    If IsDate(v) Then ToDateSafe = CDate(v)
+End Function
+
+Private Function WorkdaysBetween(ByVal d1 As Date, ByVal d2 As Date) As Long
+    If d1 = 0 Or d2 = 0 Then Exit Function
+    Dim s As Date, e As Date
+    If d2 < d1 Then s = d2: e = d1 Else s = d1: e = d2
+    Dim n As Long: n = 0
+    Do While s <= e
+        Dim w As VbDayOfWeek: w = Weekday(s, vbSunday)
+        If w >= vbMonday And w <= vbFriday Then n = n + 1
+        s = s + 1
+    Loop
+    WorkdaysBetween = n
+End Function
+
+Public Sub Jira_CreateQueries()
+    On Error GoTo Fail
+    Dim qNameS As String: qNameS = "JiraSprints"
+    Dim qNameF As String: qNameF = "JiraSprintReport"
+    Dim qNameM As String: qNameM = "JiraSprintMetrics"
+
+    Dim mS As String, mF As String, mM As String
+    mS = _
+        "let" & vbCrLf & _
+        "  Base = Excel.CurrentWorkbook(){[Name=""JiraBaseUrl""]}[Content]{0}[Column1]," & vbCrLf & _
+        "  Board = Text.From(Excel.CurrentWorkbook(){[Name=""JiraBoardId""]}[Content]{0}[Column1])," & vbCrLf & _
+        "  Source = Json.Document(Web.Contents(Base, [RelativePath=""rest/agile/1.0/board/"" & Board & ""/sprint"", Query=[state=""active,closed"", maxResults=""50""]]))," & vbCrLf & _
+        "  Values = if Record.HasFields(Source, ""values"") then Source[values] else if Record.HasFields(Source, ""sprints"") then Source[sprints] else {}," & vbCrLf & _
+        "  T = Table.FromList(Values, Splitter.SplitByNothing(), null, null, ExtraValues.Error)," & vbCrLf & _
+        "  E = Table.ExpandRecordColumn(T, ""Column1"", {""id"",""name"",""startDate"",""endDate"",""state""}, {""id"",""name"",""startDate"",""endDate"",""state""})" & vbCrLf & _
+        "in" & vbCrLf & _
+        "  E"
+
+    mF = _
+        "(sprintId as text) =>" & vbCrLf & _
+        "let" & vbCrLf & _
+        "  Base = Excel.CurrentWorkbook(){[Name=""JiraBaseUrl""]}[Content]{0}[Column1]," & vbCrLf & _
+        "  Board = Text.From(Excel.CurrentWorkbook(){[Name=""JiraBoardId""]}[Content]{0}[Column1])," & vbCrLf & _
+        "  R = Json.Document(Web.Contents(Base, [RelativePath=""rest/greenhopper/1.0/rapid/charts/sprintreport"", Query=[rapidViewId=Board, sprintId=sprintId]]))," & vbCrLf & _
+        "  C = try R[contents] otherwise null," & vbCrLf & _
+        "  committedInit = try C[completedIssuesInitialEstimateSum][value] otherwise 0," & vbCrLf & _
+        "  notCompletedInit = try C[issuesNotCompletedInitialEstimateSum][value] otherwise 0," & vbCrLf & _
+        "  completed = try C[completedIssuesEstimateSum][value] otherwise 0," & vbCrLf & _
+        "  committed = committedInit + notCompletedInit," & vbCrLf & _
+        "  T = #table({""sprintId"",""Committed"",""Completed""}, {{sprintId, committed, completed}})" & vbCrLf & _
+        "in" & vbCrLf & _
+        "  T"
+
+    mM = _
+        "let" & vbCrLf & _
+        "  S = " & qNameS & "," & vbCrLf & _
+        "  Add = Table.AddColumn(S, ""Metrics"", each " & qNameF & "(Text.From([id])))," & vbCrLf & _
+        "  E = Table.ExpandTableColumn(Add, ""Metrics"", {""Committed"",""Completed""}, {""Committed"",""Completed""})" & vbCrLf & _
+        "in" & vbCrLf & _
+        "  E"
+
+    Call AddOrUpdateQuery(qNameS, mS)
+    Call AddOrUpdateQuery(qNameF, mF)
+    Call AddOrUpdateQuery(qNameM, mM)
+
+    ' Load JiraSprintMetrics to a sheet
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = Worksheets("Jira_Metrics")
+    On Error GoTo 0
+    If ws Is Nothing Then
+        Set ws = Worksheets.Add(After:=Worksheets(Worksheets.Count))
+        ws.Name = "Jira_Metrics"
+    Else
+        ws.Cells.Clear
+    End If
+
+    Dim src As String
+    src = "OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location=" & qNameM & ";Extended Properties="""""""
+
+    Dim lo As ListObject
+    Set lo = ws.ListObjects.Add(SourceType:=0, Source:=src, Destination:=ws.Range("A1"))
+    lo.Name = "tblJiraMetrics"
+    With lo.QueryTable
+        .CommandType = xlCmdSql
+        .CommandText = Array("SELECT * FROM [" & qNameM & "]")
+        .BackgroundQuery = True
+        .RefreshStyle = xlOverwriteCells
+        .AdjustColumnWidth = True
+        .Refresh BackgroundQuery:=False
+    End With
+    Exit Sub
+Fail:
+    MsgBox "Failed to create Power Query connections: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub AddOrUpdateQuery(ByVal qName As String, ByVal mCode As String)
+    On Error Resume Next
+    Dim q As Object
+    Set q = ActiveWorkbook.Queries(qName)
+    On Error GoTo 0
+    If Not q Is Nothing Then
+        ' update
+        ActiveWorkbook.Queries(qName).Formula = mCode
+    Else
+        ActiveWorkbook.Queries.Add Name:=qName, Formula:=mCode
+    End If
+End Sub
+
+Public Sub Jira_ApplyMetricsFromQuery()
+    On Error GoTo Fail
+    Dim wsQ As Worksheet, wsM As Worksheet
+    Set wsQ = Worksheets("Jira_Metrics")
+    Set wsM = EnsureSheet("Metrics")
+    Dim loQ As ListObject, loM As ListObject
+    On Error Resume Next: Set loQ = wsQ.ListObjects("tblJiraMetrics"): On Error GoTo 0
+    On Error Resume Next: Set loM = wsM.ListObjects("tblMetrics"): On Error GoTo 0
+    If loQ Is Nothing Or loM Is Nothing Then Exit Sub
+
+    Dim dict As Object: Set dict = CreateObject("Scripting.Dictionary")
+    Dim r As ListRow
+    For Each r In loQ.ListRows
+        Dim tag As String: tag = CStr(r.Range(1, loQ.ListColumns("name").Index).Value)
+        Dim sid As Variant: sid = r.Range(1, loQ.ListColumns("id").Index).Value
+        Dim committed As Double: committed = CDbl(r.Range(1, loQ.ListColumns("Committed").Index).Value)
+        Dim completed As Double: completed = CDbl(r.Range(1, loQ.ListColumns("Completed").Index).Value)
+        ' Prefer matching by tag (name might not match our tag) fallback: use startDate
+        If Len(tag) > 0 Then dict(tag) = Array(committed, completed)
+    Next r
+    ' Apply to Metrics by Sprint column
+    For Each r In loM.ListRows
+        Dim sprintTag As String: sprintTag = CStr(r.Range(1, loM.ListColumns("Sprint").Index).Value)
+        If dict.Exists(sprintTag) Then
+            Dim v: v = dict(sprintTag)
+            r.Range(1, loM.ListColumns("Points Committed").Index).Value = v(0)
+            r.Range(1, loM.ListColumns("Points Completed").Index).Value = v(1)
+        End If
+    Next r
+    Exit Sub
+Fail:
 End Sub
 
 Private Sub MetricsApplyJiraForSprint(ByVal sStart As Date, ByVal sEnd As Date, ByVal committed As Double, ByVal completed As Double)
@@ -1082,28 +1392,7 @@ Private Sub MetricsApplyJiraForSprint(ByVal sStart As Date, ByVal sEnd As Date, 
     End If
 End Sub
 
-Private Function JiraHttpGet(ByVal path As String) As String
-    On Error GoTo Fail
-    Dim baseUrl As String: baseUrl = Trim$(GetNameValueOr("JiraBaseUrl", ""))
-    Dim email As String: email = Trim$(GetNameValueOr("JiraEmail", ""))
-    Dim token As String: token = Trim$(GetNameValueOr("JiraApiToken", ""))
-    If Len(baseUrl) = 0 Or Len(email) = 0 Or Len(token) = 0 Then Exit Function
-    If Right$(baseUrl, 1) = "/" Then baseUrl = Left$(baseUrl, Len(baseUrl) - 1)
-    Dim url As String: url = baseUrl & path
-
-    Dim http As Object
-    Set http = CreateObject("MSXML2.XMLHTTP")
-    http.Open "GET", url, False
-    http.setRequestHeader "Accept", "application/json"
-    http.setRequestHeader "Authorization", "Basic " & B64Encode(email & ":" & token)
-    http.send
-    If http.Status >= 200 And http.Status < 300 Then
-        JiraHttpGet = CStr(http.responseText)
-    End If
-    Exit Function
-Fail:
-    JiraHttpGet = ""
-End Function
+"" ' token-based HTTP removed; using Power Query From Web instead
 
 Private Sub JiraParseSprints(ByVal json As String, ByRef ids() As Long, ByRef starts() As Date, ByRef ends() As Date, ByRef outCount As Long)
     ' Lightweight parser for /board/{id}/sprint listing (assumes fields id/startDate/endDate)

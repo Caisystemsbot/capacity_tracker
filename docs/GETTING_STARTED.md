@@ -16,6 +16,12 @@ Steps
   - Holidays/PTO are deferred in this minimal baseline and will be added later.
 - Run `HealthCheck` to validate structure.
 
+Jira metrics (optional, no tokens)
+- Set `JiraBaseUrl` (e.g., `https://your-domain.atlassian.net`) and `JiraBoardId` on `Config` (H10/H13).
+- Run `Jira_PopulateMetrics`. Excel prompts for auth on first run (Data Source credentials).
+- The `Jira_Metrics` sheet is populated and columns D/E in `Metrics` are updated (Completed/Committed).
+- For offline testing: import `data/jira_metrics_sample.csv` to a sheet named `Jira_Metrics` as table `tblJiraMetrics`, then run `Jira_ApplyMetricsFromQuery`.
+
 Named values (Config_Sprints H2:H8)
 - `ActiveTeam` — the team you’re working with.
 - `TemplateVersion` — informational.
