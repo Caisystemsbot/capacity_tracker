@@ -8,6 +8,13 @@ Private Const xlValidateList As Long = 3
 Private Const xlValidAlertStop As Long = 1
 Private Const xlBetween As Long = 1
 Private Const xlValidateDecimal As Long = 2
+Private Const xlDatabase As Long = 1
+Private Const xlRowField As Long = 1
+Private Const xlColumnField As Long = 2
+Private Const xlDataField As Long = 4
+Private Const xlSum As Long = -4157
+Private Const xlCount As Long = -4112
+Private Const xlColumnClustered As Long = 51
 
 Public Sub Bootstrap()
     On Error GoTo Fail
@@ -524,6 +531,14 @@ Private Sub EnsureDashboard()
     ' Use simple macro name for reliability in pasted modules
     btn2.OnAction = "CreateOrAdvanceAvailability"
     btn2.Characters.Text = "Create/Advance Availability"
+    On Error Resume Next
+    ws.Buttons("btnBuildJiraInsights").Delete
+    On Error GoTo 0
+    Dim btn3 As Button
+    Set btn3 = ws.Buttons.Add(Left:=20, Top:=120, Width:=240, Height:=28)
+    btn3.Name = "btnBuildJiraInsights"
+    btn3.OnAction = "BuildJiraInsights"
+    btn3.Characters.Text = "Build Jira Insights"
 End Sub
 
 Public Sub CreateTeamAvailability()
@@ -1052,6 +1067,165 @@ Private Sub W(ws As Worksheet, ByVal r As Long, ByVal arr As Variant)
     Next c
 End Sub
 
+Public Sub BuildJiraInsights()
+    On Error GoTo Fail
+    LogStart "BuildJiraInsights"
+    ' Ensure sample exists and normalize (placeholder until live query wired)
+    EnsureSampleIssuesSheet
+    Jira_NormalizeIssues_FromSample
+    Jira_CreatePivotsAndCharts
+    LogOk "BuildJiraInsights"
+    If IsVerbose() Then MsgBox "Jira insights built.", vbInformation
+    Exit Sub
+Fail:
+    LogErr "BuildJiraInsights", "Err " & Err.Number & ": " & Err.Description
+    MsgBox "BuildJiraInsights failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub Jira_CreatePivotsAndCharts()
+    Dim wb As Workbook: Set wb = ThisWorkbook
+    Dim srcWs As Worksheet: Set srcWs = EnsureSheet("Jira_Facts")
+    Dim lo As ListObject
+    On Error Resume Next: Set lo = srcWs.ListObjects("tblJiraFacts"): On Error GoTo 0
+    If lo Is Nothing Or lo.ListRows.Count = 0 Then Err.Raise 1004, , "Jira_Facts empty"
+
+    Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Insights")
+    ws.Cells.Clear
+    ws.Range("A1").Value = "Jira Insights"
+    ws.Range("A1").Font.Bold = True
+
+    ' Per-story-point completion time statistics (Done only)
+    Dim startStats As Range: Set startStats = ws.Range("A3")
+    startStats.Offset(0, 0).Value = "Story Points"
+    startStats.Offset(0, 1).Value = "Avg Days (Done)"
+    startStats.Offset(0, 2).Value = "StDev Days (Done)"
+    startStats.Offset(0, 3).Value = "Count (Done)"
+    ws.Range(ws.Cells(startStats.Row, 1), ws.Cells(startStats.Row, 4)).Font.Bold = True
+    Call WritePerPointTimeStats(lo, startStats.Offset(1, 0))
+    ' Chart for Avg Days by Story Points
+    Dim lastRowStats As Long
+    lastRowStats = ws.Cells(ws.Rows.Count, startStats.Column).End(xlUp).Row
+    Dim ch0 As ChartObject
+    Set ch0 = ws.ChartObjects.Add(Left:=400, Top:=ws.Range("A3").Top, Width:=420, Height:=260)
+    ch0.Chart.ChartType = xlColumnClustered
+    ch0.Chart.SetSourceData ws.Range(ws.Cells(startStats.Row, startStats.Column), ws.Cells(lastRowStats, startStats.Column + 2))
+    ch0.Chart.HasTitle = True
+    ch0.Chart.ChartTitle.Text = "Avg Days by Story Points"
+
+    ' Pivot 1: By Epic (Sum SP, Count Issues)
+    Dim pc As PivotCache
+    Set pc = wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=lo.Range)
+    Dim pt1 As PivotTable
+    Set pt1 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Range("A8"), TableName:="ptEpic")
+    With pt1
+        On Error Resume Next
+        .PivotFields("Epic").Orientation = xlRowField
+        .PivotFields("StoryPoints").Orientation = xlDataField
+        .PivotFields("StoryPoints").Function = xlSum
+        .PivotFields("IssueKey").Orientation = xlDataField
+        .PivotFields("IssueKey").Function = xlCount
+        On Error GoTo 0
+    End With
+    ' Chart for Epic
+    Dim ch1 As ChartObject
+    Set ch1 = ws.ChartObjects.Add(Left:=400, Top:=ws.Range("A8").Top + 270, Width:=420, Height:=260)
+    ch1.Chart.ChartType = xlColumnClustered
+    ch1.Chart.SetSourceData pt1.TableRange2
+    ch1.Chart.HasTitle = True
+    ch1.Chart.ChartTitle.Text = "Epic: Sum SP and Count"
+
+    ' Pivot 2: Story Point Distribution (rows SP, count issues)
+    Dim pt2 As PivotTable
+    Set pt2 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Range("A20"), TableName:="ptSPDist")
+    With pt2
+        On Error Resume Next
+        .PivotFields("StoryPoints").Orientation = xlRowField
+        .PivotFields("IssueKey").Orientation = xlDataField
+        .PivotFields("IssueKey").Function = xlCount
+        On Error GoTo 0
+    End With
+    Dim ch2 As ChartObject
+    Set ch2 = ws.ChartObjects.Add(Left:=400, Top:=ws.Range("A20").Top + 270, Width:=420, Height:=260)
+    ch2.Chart.ChartType = xlColumnClustered
+    ch2.Chart.SetSourceData pt2.TableRange2
+    ch2.Chart.HasTitle = True
+    ch2.Chart.ChartTitle.Text = "Story Point Distribution"
+
+    ' Pivot 3: Quarter summary
+    Dim pt3 As PivotTable
+    Set pt3 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Range("A34"), TableName:="ptQuarter")
+    With pt3
+        On Error Resume Next
+        .PivotFields("QuarterTag").Orientation = xlRowField
+        .PivotFields("StoryPoints").Orientation = xlDataField
+        .PivotFields("StoryPoints").Function = xlSum
+        .PivotFields("IssueKey").Orientation = xlDataField
+        .PivotFields("IssueKey").Function = xlCount
+        On Error GoTo 0
+    End With
+
+    ws.Columns("A:K").AutoFit
+End Sub
+
+Private Sub WritePerPointTimeStats(ByVal lo As ListObject, ByVal dest As Range)
+    Dim idxSP As Long, idxStatus As Long, idxCycle As Long, idxResolved As Long
+    On Error Resume Next
+    idxSP = lo.ListColumns("StoryPoints").Index
+    idxStatus = lo.ListColumns("Status").Index
+    idxCycle = lo.ListColumns("CycleDays").Index
+    idxResolved = lo.ListColumns("Resolved").Index
+    On Error GoTo 0
+    If idxSP = 0 Or idxStatus = 0 Or idxCycle = 0 Then Exit Sub
+
+    Dim stats As Object: Set stats = CreateObject("Scripting.Dictionary")
+    Dim sums As Object: Set sums = CreateObject("Scripting.Dictionary")
+    Dim sumsSq As Object: Set sumsSq = CreateObject("Scripting.Dictionary")
+    Dim i As Long
+    For i = 1 To lo.ListRows.Count
+        Dim st As String: st = UCase$(CStr(lo.DataBodyRange.Cells(i, idxStatus).Value))
+        If st = "DONE" Then
+            Dim sp As Long: sp = CLng(Val(lo.DataBodyRange.Cells(i, idxSP).Value))
+            If sp > 0 Then
+                Dim days As Double: days = Val(lo.DataBodyRange.Cells(i, idxCycle).Value)
+                If days > 0 Then
+                    If Not stats.Exists(sp) Then
+                        stats(sp) = 0: sums(sp) = 0#: sumsSq(sp) = 0#
+                    End If
+                    stats(sp) = CLng(stats(sp)) + 1
+                    sums(sp) = CDbl(sums(sp)) + days
+                    sumsSq(sp) = CDbl(sumsSq(sp)) + days * days
+                End If
+            End If
+        End If
+    Next i
+
+    ' Sort keys ascending
+    Dim keys() As Variant: keys = stats.Keys
+    Dim j As Long, k As Long
+    For j = LBound(keys) To UBound(keys) - 1
+        For k = j + 1 To UBound(keys)
+            If CLng(keys(k)) < CLng(keys(j)) Then
+                Dim tmp As Variant: tmp = keys(j): keys(j) = keys(k): keys(k) = tmp
+            End If
+        Next k
+    Next j
+
+    Dim row As Long: row = dest.Row
+    For j = LBound(keys) To UBound(keys)
+        Dim spv As Long: spv = CLng(keys(j))
+        Dim n As Long: n = CLng(stats(spv))
+        Dim s As Double: s = CDbl(sums(spv))
+        Dim ss As Double: ss = CDbl(sumsSq(spv))
+        Dim avg As Double: If n > 0 Then avg = s / n
+        Dim sd As Double: If n > 1 Then sd = Sqr((ss - (s * s) / n) / (n - 1))
+        dest.Worksheet.Cells(row, dest.Column + 0).Value = spv
+        dest.Worksheet.Cells(row, dest.Column + 1).Value = Round(avg, 2)
+        dest.Worksheet.Cells(row, dest.Column + 2).Value = Round(sd, 2)
+        dest.Worksheet.Cells(row, dest.Column + 3).Value = n
+        row = row + 1
+    Next j
+End Sub
+
 Public Sub Jira_NormalizeIssues_FromSample()
     Jira_NormalizeIssues "Jira_Issues_Sample", "tblJiraIssuesSample"
 End Sub
@@ -1073,15 +1247,28 @@ Private Sub EnsureSampleIssuesSheet()
     Dim base As Date: base = DateSerial(2025, 9, 10)
     Dim ep As Long, sp As Variant, t As String, st As String
     Dim r As Long: r = 2
+    Dim spPool As Variant
+    spPool = Array(1,1,1,1,1,1, 2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3,3,3, 5,5,5,5,5,5,5,5, 8,8,8,8,8, 13,13,13)
     For i = 1 To 40
         t = IIf(i Mod 10 = 0, "Bug", IIf(i Mod 5 = 0, "Task", "Story"))
-        st = IIf(i Mod 7 = 0, "To Do", IIf(i Mod 3 = 0, "In Progress", "Done"))
+        ' Majority Done, some In Progress/To Do
+        If i Mod 10 = 0 Or i Mod 13 = 0 Then
+            st = "To Do"
+        ElseIf i Mod 6 = 0 Or i Mod 7 = 0 Then
+            st = "In Progress"
+        Else
+            st = "Done"
+        End If
         ep = 100 + ((i - 1) Mod 6)
-        sp = Choose(((i - 1) Mod 6) + 1, 1, 2, 3, 5, 8, 13)
-        Dim created As Date: created = base + ((i - 1) * 2 Mod 42)
+        sp = spPool(i - 1)
+        Dim created As Date: created = base + ((i - 1) * 2 Mod 70)
         Dim resolved As Variant
         If st = "Done" Then
-            resolved = created + (sp * 2 + (i Mod 3))
+            Dim baseDays As Long: baseDays = sp * 2 + ((i Mod 5) - 2) ' +/- 2 days variability
+            If i Mod 12 = 0 Then baseDays = baseDays + sp ' overrun outlier
+            If i Mod 11 = 0 Then baseDays = baseDays - sp ' underrun outlier
+            If baseDays < 1 Then baseDays = 1
+            resolved = created + baseDays
         Else
             resolved = ""
         End If
