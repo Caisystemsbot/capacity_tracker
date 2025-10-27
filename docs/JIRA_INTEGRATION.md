@@ -20,6 +20,7 @@ How to run
 2) Run macro `Jira_PopulateMetrics`.
    - First refresh: Excel prompts you to sign in (Organizational/Work account). Approve and store credentials.
    - The macro refreshes, then copies `Committed`/`Completed` into `Metrics` columns E/D by sprint.
+3) On the Dashboard, use the button "Sanitize Raw + Build Insights" to normalize a selected issues sheet/table (e.g., `Jira_Raw` or `Jira_Issues_Sample_Expanded`) and rebuild insights.
 
 Matching behavior
 - Metrics row is matched by the `Sprint` text. Ensure your Metrics `Sprint` values match Jira sprint names, or we can switch to a date-range based match in a follow-up.
@@ -34,6 +35,9 @@ Offline testing (sample data)
 - Run `Jira_ApplyMetricsFromQuery` to copy the sample Committed/Completed into your `Metrics` sheet.
 
 Troubleshooting
-- If `Jira_Metrics` is empty after refresh, open Data → Queries & Connections and refresh `JiraSprints` to complete auth.
+- If `Jira_Metrics` is empty after refresh, open Data > Queries & Connections and refresh `JiraSprints` to complete auth.
 - If sprint name mismatches prevent copying, temporarily type the Jira sprint `name` into the Metrics `Sprint` column for the rows you want to update.
 
+Insights layout changes
+- Removed the "Build Jira Insights" button; use "Sanitize Raw + Build Insights".
+- Replaced the "Throughput & Velocity" summary with a compact table of average cycle time by story points (1, 2, 3, 5, 8, 13).

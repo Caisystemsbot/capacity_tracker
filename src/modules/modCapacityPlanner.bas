@@ -98,24 +98,71 @@ End Sub
 ' -------------------- internals --------------------
 
 Private Sub EnsureSheets()
+    On Error GoTo CoreFail
     RemoveSheetIfExists "Calendars"
     Dim cfg As Worksheet: Set cfg = EnsureConfig()
-    EnsureSheet "Getting_Started"
-    EnsureSheet "Dashboard"
-    EnsureSheet "Logs"
+
+    ' Create core sheets (ignore if already there)
+    On Error Resume Next: Set cfg = EnsureSheet("Getting_Started"): On Error GoTo CoreFail
+    On Error Resume Next: EnsureSheet "Dashboard": On Error GoTo CoreFail
+    On Error Resume Next: EnsureSheet "Logs": On Error GoTo CoreFail
+
     ' Ensure Metrics sheet exists (build skeleton once)
     Dim m As Worksheet: Set m = EnsureSheet("Metrics")
+    If m Is Nothing Then Err.Raise 91, , "Failed to create Metrics sheet"
     If Not HasTable(m, "tblMetrics") Then EnsureMetricsSheet
+
     ' Provide a baked-in sample issues sheet for analysis (no macro needed)
+    On Error GoTo SampleIssuesFail
+    LogStart "EnsureSampleIssuesSheet"
     EnsureSampleIssuesSheet
+    LogOk "EnsureSampleIssuesSheet"
+
+    ' Provide an optional raw sheet with many columns to mimic Jira export
+    On Error GoTo RawFail
+    LogStart "EnsureRawSampleSheet"
+    EnsureRawSampleSheet
+    LogOk "EnsureRawSampleSheet"
+
+    ' Expanded issues sample for sanitization demonstration
+    On Error GoTo ExpandedFail
+    LogStart "EnsureSampleIssuesSheetExpanded"
+    EnsureSampleIssuesSheetExpanded
+    LogOk "EnsureSampleIssuesSheetExpanded"
+    Exit Sub
+
+CoreFail:
+    LogErr "EnsureSheets", "Core sheet creation failed: Err " & Err.Number & ": " & Err.Description
+    Err.Raise Err.Number
+SampleIssuesFail:
+    LogErr "EnsureSheets", "EnsureSampleIssuesSheet failed: Err " & Err.Number & ": " & Err.Description
+    Resume Next
+RawFail:
+    LogErr "EnsureSheets", "EnsureRawSampleSheet failed: Err " & Err.Number & ": " & Err.Description
+    Resume Next
+ExpandedFail:
+    LogErr "EnsureSheets", "EnsureSampleIssuesSheetExpanded failed: Err " & Err.Number & ": " & Err.Description
+    Resume Next
 End Sub
 
 Private Sub EnsureTables()
     Dim ws As Worksheet
     Set ws = EnsureConfig()
+    On Error GoTo RosterFail
+    LogStart "EnsureRosterTable"
     EnsureRosterTable ws
+    LogOk "EnsureRosterTable"
 
+    On Error GoTo LogsFail
+    LogStart "EnsureLogsTable"
     Call EnsureSheetTable("Logs", "tblLogs", Array("Timestamp", "User", "Action", "Outcome", "Details"))
+    LogOk "EnsureLogsTable"
+    Exit Sub
+RosterFail:
+    LogErr "EnsureRosterTable", "Err " & Err.Number & ": " & Err.Description
+    Resume Next
+LogsFail:
+    LogErr "EnsureLogsTable", "Err " & Err.Number & ": " & Err.Description
 End Sub
 
 Private Sub SeedNamedValues()
@@ -520,26 +567,65 @@ Private Sub EnsureDashboard()
     ws.Range("B6").Formula = "=SprintLengthDays"
     ws.Range("A1:A6").Font.Bold = True
 
-    ' Create or refresh a single button (only the new one)
-    On Error Resume Next
-    ws.Buttons("btnCreateAvailability").Delete
-    ws.Buttons("btnAdvanceAvailability").Delete
-    On Error GoTo 0
+    ' Create or refresh buttons, defensively removing any shape with same name
+    Dim nm As Variant, shp As Shape
+    For Each nm In Array("btnCreateAvailability", "btnAdvanceAvailability", "btnSanitizeRawAndBuild")
+        On Error Resume Next
+        ws.Buttons(CStr(nm)).Delete
+        On Error GoTo 0
+        For Each shp In ws.Shapes
+            If StrComp(shp.Name, CStr(nm), vbTextCompare) = 0 Then shp.Delete
+        Next shp
+    Next nm
+
+    ' Button: Create/Advance Availability
     Dim btn2 As Button
     Set btn2 = ws.Buttons.Add(Left:=20, Top:=80, Width:=240, Height:=28)
-    btn2.Name = "btnAdvanceAvailability"
-    ' Use simple macro name for reliability in pasted modules
+    On Error Resume Next
+    btn2.Name = UniqueShapeName(ws, "btnAdvanceAvailability")
+    On Error GoTo 0
     btn2.OnAction = "CreateOrAdvanceAvailability"
     btn2.Characters.Text = "Create/Advance Availability"
+
+    ' (Removed) Build Jira Insights button; use Sanitize Raw + Build Insights instead
+
+    ' Button: Sanitize Raw + Build Insights
+    Dim btn4 As Button
+    Set btn4 = ws.Buttons.Add(Left:=20, Top:=120, Width:=240, Height:=28)
     On Error Resume Next
-    ws.Buttons("btnBuildJiraInsights").Delete
+    btn4.Name = UniqueShapeName(ws, "btnSanitizeRawAndBuild")
     On Error GoTo 0
-    Dim btn3 As Button
-    Set btn3 = ws.Buttons.Add(Left:=20, Top:=120, Width:=240, Height:=28)
-    btn3.Name = "btnBuildJiraInsights"
-    btn3.OnAction = "BuildJiraInsights"
-    btn3.Characters.Text = "Build Jira Insights"
+    btn4.OnAction = "SanitizeRawAndBuildInsights"
+    btn4.Characters.Text = "Sanitize Raw + Build Insights"
+
+    ' Button: Refresh Samples
+    Dim btn5 As Button
+    Set btn5 = ws.Buttons.Add(Left:=20, Top:=200, Width:=240, Height:=28)
+    On Error Resume Next
+    btn5.Name = UniqueShapeName(ws, "btnRefreshSamples")
+    On Error GoTo 0
+    btn5.OnAction = "RefreshSamples"
+    btn5.Characters.Text = "Refresh Samples"
 End Sub
+
+Private Function UniqueShapeName(ByVal ws As Worksheet, ByVal base As String) As String
+    Dim nameCandidate As String: nameCandidate = base
+    Dim i As Long: i = 1
+    Dim exists As Boolean
+    Do
+        exists = False
+        Dim s As Shape
+        For Each s In ws.Shapes
+            If StrComp(s.Name, nameCandidate, vbTextCompare) = 0 Then
+                exists = True: Exit For
+            End If
+        Next s
+        If Not exists Then Exit Do
+        i = i + 1
+        nameCandidate = base & "_" & CStr(i)
+    Loop
+    UniqueShapeName = nameCandidate
+End Function
 
 Public Sub CreateTeamAvailability()
     On Error GoTo Fail
@@ -1042,7 +1128,7 @@ Public Sub Jira_BuildSampleIssues()
     Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Issues_Sample")
     ws.Cells.Clear
     Dim headers As Variant
-    headers = Array("Summary","Issue key","Issue id","Issue Type","Status","Created","Resolved","Fix Version/s","Custom field (Epic Link)","Custom field (Story Points)")
+    headers = Array("Summary","Issue key","Issue id","Issue Type","Status","Created","Start Progress","Resolved","Fix Version/s","Custom field (Epic Link)","Custom field (Story Points)")
     Dim i As Long
     For i = LBound(headers) To UBound(headers)
         ws.Cells(1, i + 1).Value = headers(i)
@@ -1097,9 +1183,9 @@ Private Sub Jira_CreatePivotsAndCharts()
     ' Per-story-point completion time statistics (Done only)
     Dim startStats As Range: Set startStats = ws.Range("A3")
     startStats.Offset(0, 0).Value = "Story Points"
-    startStats.Offset(0, 1).Value = "Avg Days (Done)"
-    startStats.Offset(0, 2).Value = "StDev Days (Done)"
-    startStats.Offset(0, 3).Value = "Count (Done)"
+    startStats.Offset(0, 1).Value = "Avg Days"
+    startStats.Offset(0, 2).Value = "StDev Days"
+    startStats.Offset(0, 3).Value = "Count"
     ws.Range(ws.Cells(startStats.Row, 1), ws.Cells(startStats.Row, 4)).Font.Bold = True
     Call WritePerPointTimeStats(lo, startStats.Offset(1, 0))
     ' Chart for Avg Days by Story Points
@@ -1112,11 +1198,82 @@ Private Sub Jira_CreatePivotsAndCharts()
     ch0.Chart.HasTitle = True
     ch0.Chart.ChartTitle.Text = "Avg Days by Story Points"
 
+    ' Cycle Time Analysis (calendar days)
+    Dim meanCT As Double, medCT As Double, sdCT As Double, outCT As Long
+    Call ComputeCycleCalendarStats(lo, meanCT, medCT, sdCT, outCT)
+    Dim cycStart As Long: cycStart = lastRowStats + 2
+    ws.Cells(cycStart, 1).Value = "Cycle Time (days)"
+    ws.Cells(cycStart, 1).Font.Bold = True
+    ws.Cells(cycStart + 1, 1).Value = "Mean"
+    ws.Cells(cycStart + 1, 2).Value = Round(meanCT, 2)
+    ws.Cells(cycStart + 2, 1).Value = "Median"
+    ws.Cells(cycStart + 2, 2).Value = Round(medCT, 2)
+    ws.Cells(cycStart + 3, 1).Value = "StDev"
+    ws.Cells(cycStart + 3, 2).Value = Round(sdCT, 2)
+    ws.Cells(cycStart + 4, 1).Value = "Outliers (> mean + 2*stdev)"
+    ws.Cells(cycStart + 4, 2).Value = outCT
+
+    ' Bottleneck Detection (calendar days)
+    Dim avgWait As Double, avgExec As Double
+    Call ComputeBottlenecks(lo, avgWait, avgExec)
+    ws.Cells(cycStart + 6, 1).Value = "Bottlenecks"
+    ws.Cells(cycStart + 6, 1).Font.Bold = True
+    ws.Cells(cycStart + 7, 1).Value = "Avg To Do → In Progress (days)"
+    ws.Cells(cycStart + 7, 2).Value = IIf(avgWait > 0, Round(avgWait, 2), "N/A")
+    ws.Cells(cycStart + 8, 1).Value = "Avg In Progress → Done (days)"
+    ws.Cells(cycStart + 8, 2).Value = IIf(avgExec > 0, Round(avgExec, 2), "N/A")
+
+    ' Summary replacement: Average Cycle Time by Story Points (1,2,3,5,8,13)
+    Dim thr As Range: Set thr = startStats.Offset(0, 6) ' move further right to avoid overlap
+    thr.Value = "Cycle Time by Story Points"
+    thr.Font.Bold = True
+    thr.Offset(1, 0).Value = "Story Points"
+    thr.Offset(1, 1).Value = "Avg Days"
+    thr.Offset(1, 0).Resize(1, 2).Font.Bold = True
+
+    Dim idxSP2 As Long, idxCycle2 As Long
+    On Error Resume Next
+    idxSP2 = lo.ListColumns("StoryPoints").Index
+    idxCycle2 = lo.ListColumns("CycleDays").Index
+    On Error GoTo 0
+    If idxSP2 > 0 And idxCycle2 > 0 Then
+        Dim cats As Variant: cats = Array(1, 2, 3, 5, 8, 13)
+        Dim sums2 As Object: Set sums2 = CreateObject("Scripting.Dictionary")
+        Dim counts2 As Object: Set counts2 = CreateObject("Scripting.Dictionary")
+        Dim i2 As Long
+        For i2 = 1 To lo.ListRows.Count
+            Dim sp2 As Long: sp2 = CLng(Val(lo.DataBodyRange.Cells(i2, idxSP2).Value))
+            Dim days2 As Double: days2 = Val(lo.DataBodyRange.Cells(i2, idxCycle2).Value)
+            If days2 > 0 Then
+                Dim j As Long
+                For j = LBound(cats) To UBound(cats)
+                    If sp2 = CLng(cats(j)) Then
+                        If Not sums2.Exists(sp2) Then sums2(sp2) = 0#: counts2(sp2) = 0
+                        sums2(sp2) = CDbl(sums2(sp2)) + days2
+                        counts2(sp2) = CLng(counts2(sp2)) + 1
+                        Exit For
+                    End If
+                Next j
+            End If
+        Next i2
+        Dim row2 As Long: row2 = thr.Row + 2
+        For i2 = LBound(cats) To UBound(cats)
+            ws.Cells(row2, thr.Column).Value = cats(i2)
+            If counts2.Exists(CLng(cats(i2))) And CLng(counts2(CLng(cats(i2)))) > 0 Then
+                ws.Cells(row2, thr.Column + 1).Value = Round(CDbl(sums2(CLng(cats(i2)))) / CLng(counts2(CLng(cats(i2)))), 2)
+            Else
+                ws.Cells(row2, thr.Column + 1).Value = "N/A"
+            End If
+            row2 = row2 + 1
+        Next i2
+    End If
+
     ' Pivot 1: By Epic (Sum SP, Count Issues)
     Dim pc As PivotCache
     Set pc = wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=lo.Range)
     Dim pt1 As PivotTable
-    Set pt1 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Range("A8"), TableName:="ptEpic")
+    Dim rowStart As Long: rowStart = cycStart + 6
+    Set pt1 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:="ptEpic")
     With pt1
         On Error Resume Next
         .PivotFields("Epic").Orientation = xlRowField
@@ -1128,7 +1285,7 @@ Private Sub Jira_CreatePivotsAndCharts()
     End With
     ' Chart for Epic
     Dim ch1 As ChartObject
-    Set ch1 = ws.ChartObjects.Add(Left:=400, Top:=ws.Range("A8").Top + 270, Width:=420, Height:=260)
+    Set ch1 = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(rowStart, 1).Top, Width:=420, Height:=260)
     ch1.Chart.ChartType = xlColumnClustered
     ch1.Chart.SetSourceData pt1.TableRange2
     ch1.Chart.HasTitle = True
@@ -1136,7 +1293,8 @@ Private Sub Jira_CreatePivotsAndCharts()
 
     ' Pivot 2: Story Point Distribution (rows SP, count issues)
     Dim pt2 As PivotTable
-    Set pt2 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Range("A20"), TableName:="ptSPDist")
+    rowStart = pt1.TableRange2.Row + pt1.TableRange2.Rows.Count + 2
+    Set pt2 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:="ptSPDist")
     With pt2
         On Error Resume Next
         .PivotFields("StoryPoints").Orientation = xlRowField
@@ -1145,7 +1303,7 @@ Private Sub Jira_CreatePivotsAndCharts()
         On Error GoTo 0
     End With
     Dim ch2 As ChartObject
-    Set ch2 = ws.ChartObjects.Add(Left:=400, Top:=ws.Range("A20").Top + 270, Width:=420, Height:=260)
+    Set ch2 = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(rowStart, 1).Top, Width:=420, Height:=260)
     ch2.Chart.ChartType = xlColumnClustered
     ch2.Chart.SetSourceData pt2.TableRange2
     ch2.Chart.HasTitle = True
@@ -1153,7 +1311,8 @@ Private Sub Jira_CreatePivotsAndCharts()
 
     ' Pivot 3: Quarter summary
     Dim pt3 As PivotTable
-    Set pt3 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Range("A34"), TableName:="ptQuarter")
+    rowStart = pt2.TableRange2.Row + pt2.TableRange2.Rows.Count + 2
+    Set pt3 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:="ptQuarter")
     With pt3
         On Error Resume Next
         .PivotFields("QuarterTag").Orientation = xlRowField
@@ -1164,43 +1323,53 @@ Private Sub Jira_CreatePivotsAndCharts()
         On Error GoTo 0
     End With
 
+    ' Pivot 4: Cumulative Flow (Status by Created Month)
+    Dim pt4 As PivotTable
+    rowStart = pt3.TableRange2.Row + pt3.TableRange2.Rows.Count + 2
+    Set pt4 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:="ptCumulativeFlow")
+    With pt4
+        On Error Resume Next
+        .PivotFields("Status").Orientation = xlRowField
+        .PivotFields("CreatedMonth").Orientation = xlColumnField
+        .PivotFields("IssueKey").Orientation = xlDataField
+        .PivotFields("IssueKey").Function = xlCount
+        On Error GoTo 0
+    End With
+
     ws.Columns("A:K").AutoFit
 End Sub
 
 Private Sub WritePerPointTimeStats(ByVal lo As ListObject, ByVal dest As Range)
-    Dim idxSP As Long, idxStatus As Long, idxCycle As Long, idxResolved As Long
+    Dim idxSP As Long, idxCycle As Long
     On Error Resume Next
     idxSP = lo.ListColumns("StoryPoints").Index
-    idxStatus = lo.ListColumns("Status").Index
     idxCycle = lo.ListColumns("CycleDays").Index
-    idxResolved = lo.ListColumns("Resolved").Index
     On Error GoTo 0
-    If idxSP = 0 Or idxStatus = 0 Or idxCycle = 0 Then Exit Sub
+    If idxSP = 0 Or idxCycle = 0 Then Exit Sub
 
+    Dim allSP As Object: Set allSP = CreateObject("Scripting.Dictionary")
     Dim stats As Object: Set stats = CreateObject("Scripting.Dictionary")
     Dim sums As Object: Set sums = CreateObject("Scripting.Dictionary")
     Dim sumsSq As Object: Set sumsSq = CreateObject("Scripting.Dictionary")
     Dim i As Long
     For i = 1 To lo.ListRows.Count
-        Dim st As String: st = UCase$(CStr(lo.DataBodyRange.Cells(i, idxStatus).Value))
-        If st = "DONE" Then
-            Dim sp As Long: sp = CLng(Val(lo.DataBodyRange.Cells(i, idxSP).Value))
-            If sp > 0 Then
-                Dim days As Double: days = Val(lo.DataBodyRange.Cells(i, idxCycle).Value)
-                If days > 0 Then
-                    If Not stats.Exists(sp) Then
-                        stats(sp) = 0: sums(sp) = 0#: sumsSq(sp) = 0#
-                    End If
-                    stats(sp) = CLng(stats(sp)) + 1
-                    sums(sp) = CDbl(sums(sp)) + days
-                    sumsSq(sp) = CDbl(sumsSq(sp)) + days * days
+        Dim sp As Long: sp = CLng(Val(lo.DataBodyRange.Cells(i, idxSP).Value))
+        If sp > 0 Then
+            If Not allSP.Exists(sp) Then allSP(sp) = True
+            Dim days As Double: days = Val(lo.DataBodyRange.Cells(i, idxCycle).Value)
+            If days > 0 Then
+                If Not stats.Exists(sp) Then
+                    stats(sp) = 0: sums(sp) = 0#: sumsSq(sp) = 0#
                 End If
+                stats(sp) = CLng(stats(sp)) + 1
+                sums(sp) = CDbl(sums(sp)) + days
+                sumsSq(sp) = CDbl(sumsSq(sp)) + days * days
             End If
         End If
     Next i
 
-    ' Sort keys ascending
-    Dim keys() As Variant: keys = stats.Keys
+    ' Use all distinct SP values (even if no resolved items yet)
+    Dim keys() As Variant: keys = allSP.Keys
     Dim j As Long, k As Long
     For j = LBound(keys) To UBound(keys) - 1
         For k = j + 1 To UBound(keys)
@@ -1213,9 +1382,9 @@ Private Sub WritePerPointTimeStats(ByVal lo As ListObject, ByVal dest As Range)
     Dim row As Long: row = dest.Row
     For j = LBound(keys) To UBound(keys)
         Dim spv As Long: spv = CLng(keys(j))
-        Dim n As Long: n = CLng(stats(spv))
-        Dim s As Double: s = CDbl(sums(spv))
-        Dim ss As Double: ss = CDbl(sumsSq(spv))
+        Dim n As Long: If stats.Exists(spv) Then n = CLng(stats(spv)) Else n = 0
+        Dim s As Double: If sums.Exists(spv) Then s = CDbl(sums(spv)) Else s = 0#
+        Dim ss As Double: If sumsSq.Exists(spv) Then ss = CDbl(sumsSq(spv)) Else ss = 0#
         Dim avg As Double: If n > 0 Then avg = s / n
         Dim sd As Double: If n > 1 Then sd = Sqr((ss - (s * s) / n) / (n - 1))
         dest.Worksheet.Cells(row, dest.Column + 0).Value = spv
@@ -1228,6 +1397,90 @@ End Sub
 
 Public Sub Jira_NormalizeIssues_FromSample()
     Jira_NormalizeIssues "Jira_Issues_Sample", "tblJiraIssuesSample"
+End Sub
+
+Public Sub SanitizeRawAndBuildInsights()
+    On Error GoTo Fail
+    LogStart "SanitizeRawAndBuildInsights"
+
+    Dim srcSheet As String, srcTable As String
+    Dim v As Variant
+    v = Application.InputBox( _
+        Prompt:="Enter source sheet name (e.g., Jira_Raw or Jira_Issues_Sample_Expanded)", _
+        Title:="Sanitize Source", Type:=2)
+    If VarType(v) = vbBoolean And v = False Then GoTo CancelOp
+    srcSheet = Trim$(CStr(v))
+    If Len(srcSheet) = 0 Then GoTo CancelOp
+
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(Trim$(srcSheet))
+    On Error GoTo 0
+    If ws Is Nothing Then
+        ' Offer to create known samples by name
+        If StrComp(Trim$(srcSheet), "Jira_Raw", vbTextCompare) = 0 Then
+            EnsureRawSampleSheet
+            Set ws = ThisWorkbook.Worksheets("Jira_Raw")
+        ElseIf StrComp(Trim$(srcSheet), "Jira_Issues_Sample_Expanded", vbTextCompare) = 0 Then
+            EnsureSampleIssuesSheetExpanded
+            Set ws = ThisWorkbook.Worksheets("Jira_Issues_Sample_Expanded")
+        ElseIf StrComp(Trim$(srcSheet), "Jira_Issues_Sample", vbTextCompare) = 0 Then
+            EnsureSampleIssuesSheet
+            Set ws = ThisWorkbook.Worksheets("Jira_Issues_Sample")
+        End If
+        If ws Is Nothing Then Err.Raise 9, , "Sheet not found: " & srcSheet
+    End If
+
+    ' Resolve table name
+    If ws.ListObjects.Count = 1 Then
+        srcTable = ws.ListObjects(1).Name
+    Else
+        ' Try common table names first
+        Dim tryName As Variant, lo As ListObject
+        For Each tryName In Array("tblJiraRaw", "tblJiraIssuesSampleExpanded", "tblJiraIssuesSample")
+            On Error Resume Next
+            Set lo = ws.ListObjects(CStr(tryName))
+            On Error GoTo 0
+            If Not lo Is Nothing Then srcTable = lo.Name: Exit For
+        Next tryName
+        If Len(srcTable) = 0 Then
+            v = Application.InputBox( _
+                Prompt:="Enter table name on sheet '" & ws.Name & "' (ListObject name)", _
+                Title:="Sanitize Source Table", Type:=2)
+            If VarType(v) = vbBoolean And v = False Then GoTo CancelOp
+            srcTable = Trim$(CStr(v))
+            If Len(srcTable) = 0 Then GoTo CancelOp
+        End If
+    End If
+
+    ' Normalize and build insights from selected sheet/table
+    Jira_NormalizeIssues ws.Name, srcTable
+    Jira_CreatePivotsAndCharts
+    LogOk "SanitizeRawAndBuildInsights"
+    If IsVerbose() Then MsgBox "Sanitized '" & ws.Name & "' (" & srcTable & ") and updated insights.", vbInformation
+    Exit Sub
+
+CancelOp:
+    LogErr "SanitizeRawAndBuildInsights", "Cancelled by user"
+    Exit Sub
+
+Fail:
+    LogErr "SanitizeRawAndBuildInsights", "Err " & Err.Number & ": " & Err.Description
+    MsgBox "SanitizeRawAndBuildInsights failed: " & Err.Description, vbExclamation
+End Sub
+
+Public Sub RefreshSamples()
+    On Error GoTo Fail
+    LogStart "RefreshSamples"
+    EnsureSampleIssuesSheet
+    EnsureRawSampleSheet
+    EnsureSampleIssuesSheetExpanded
+    LogOk "RefreshSamples"
+    If IsVerbose() Then MsgBox "Sample sheets regenerated.", vbInformation
+    Exit Sub
+Fail:
+    LogErr "RefreshSamples", "Err " & Err.Number & ": " & Err.Description
+    MsgBox "RefreshSamples failed: " & Err.Description, vbExclamation
 End Sub
 
 Private Sub EnsureSampleIssuesSheet()
@@ -1262,14 +1515,18 @@ Private Sub EnsureSampleIssuesSheet()
         ep = 100 + ((i - 1) Mod 6)
         sp = spPool(i - 1)
         Dim created As Date: created = base + ((i - 1) * 2 Mod 70)
-        Dim resolved As Variant
-        If st = "Done" Then
+        Dim startProg As Variant, resolved As Variant
+        If st = "Done" Or sp = 13 Then
+            st = "Done"
             Dim baseDays As Long: baseDays = sp * 2 + ((i Mod 5) - 2) ' +/- 2 days variability
             If i Mod 12 = 0 Then baseDays = baseDays + sp ' overrun outlier
             If i Mod 11 = 0 Then baseDays = baseDays - sp ' underrun outlier
             If baseDays < 1 Then baseDays = 1
+            Dim startOffset As Long: startOffset = Application.WorksheetFunction.Max(1, baseDays \ 3)
+            startProg = created + startOffset
             resolved = created + baseDays
         Else
+            startProg = ""
             resolved = ""
         End If
         Dim fixv As String
@@ -1287,6 +1544,7 @@ Private Sub EnsureSampleIssuesSheet()
             t, _
             st, _
             created, _
+            startProg, _
             resolved, _
             fixv, _
             "EPIC-" & ep, _
@@ -1301,6 +1559,202 @@ Private Sub EnsureSampleIssuesSheet()
     lo.Name = "tblJiraIssuesSample"
 End Sub
 
+Private Sub EnsureRawSampleSheet()
+    ' Create a verbose raw sheet simulating a Jira export with many columns
+    Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Raw")
+    Dim lo As ListObject
+    On Error Resume Next: Set lo = ws.ListObjects("tblJiraRaw"): On Error GoTo 0
+    If Not lo Is Nothing Then
+        If lo.ListRows.Count >= 40 Then Exit Sub
+    End If
+
+    ws.Cells.Clear
+    Dim hdrStr As String
+    hdrStr = "Summary|Issue key|Issue id|Issue Type|Status|Priority|Assignee|Reporter|" & _
+             "Created|Start Progress|Resolved|Fix Version/s|Affects Version/s|Component/s|Labels|" & _
+             "Custom field (Epic Link)|Custom field (Story Points)|Custom field (Target Date)|URL|Extra1|Extra2"
+    Dim headers As Variant: headers = Split(hdrStr, "|")
+    Dim i As Long
+    For i = LBound(headers) To UBound(headers)
+        ws.Cells(1, i + 1).Value = headers(i)
+    Next i
+
+    Dim base As Date: base = DateSerial(2025, 9, 10)
+    Dim spPool As Variant
+    spPool = Array(1,1,1,1,1,1, 2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3,3,3, 5,5,5,5,5,5,5,5, 8,8,8,8,8, 13,13,13)
+    Dim r As Long: r = 2
+    For i = 1 To 40
+        Dim t As String, st As String, pri As String
+        t = IIf(i Mod 10 = 0, "Bug", IIf(i Mod 5 = 0, "Task", "Story"))
+        pri = Choose(((i Mod 3) + 1), "Medium","High","Low")
+        If i Mod 10 = 0 Or i Mod 13 = 0 Then
+            st = "To Do"
+        ElseIf i Mod 6 = 0 Or i Mod 7 = 0 Then
+            st = "In Progress"
+        Else
+            st = "Done"
+        End If
+        Dim created As Date: created = base + ((i - 1) * 2 Mod 70)
+        Dim sp As Variant: sp = spPool(i - 1)
+        Dim startProg As Variant, resolved As Variant
+        If st = "Done" Or sp = 13 Then
+            st = "Done"
+            Dim baseDays As Long: baseDays = sp * 2 + ((i Mod 5) - 2)
+            If baseDays < 1 Then baseDays = 1
+            Dim startOffset As Long: startOffset = Application.WorksheetFunction.Max(1, baseDays \ 3)
+            startProg = created + startOffset
+            resolved = created + baseDays
+        Else
+            startProg = ""
+            resolved = ""
+        End If
+        Dim fixv As String
+        If Month(created) = 9 Then
+            fixv = "2025.09.23"
+        ElseIf Month(created) = 10 Then
+            fixv = "2025.10.07"
+        Else
+            fixv = "2025.10.21"
+        End If
+
+        ' Write row values directly to avoid line continuation limits
+        ws.Cells(r, 1).Value = "Raw Item " & i
+        ws.Cells(r, 2).Value = "FIINT-" & CStr(4400 + i)
+        ws.Cells(r, 3).Value = 440000 + i * 15
+        ws.Cells(r, 4).Value = t
+        ws.Cells(r, 5).Value = st
+        ws.Cells(r, 6).Value = pri
+        ws.Cells(r, 7).Value = "User" & ((i Mod 5) + 1)
+        ws.Cells(r, 8).Value = "Reporter" & ((i Mod 3) + 1)
+        ws.Cells(r, 9).Value = created
+        ws.Cells(r, 10).Value = startProg
+        ws.Cells(r, 11).Value = resolved
+        ws.Cells(r, 12).Value = fixv
+        ws.Cells(r, 13).Value = "v1.0"
+        ws.Cells(r, 14).Value = "Core"
+        ws.Cells(r, 15).Value = IIf(i Mod 4 = 0, "urgent", "")
+        ws.Cells(r, 16).Value = "EPIC-" & (100 + ((i - 1) Mod 6))
+        ws.Cells(r, 17).Value = sp
+        ws.Cells(r, 18).Value = created + 30
+        ws.Cells(r, 19).Value = "https://jira.example/browse/FIINT-" & CStr(4400 + i)
+        ws.Cells(r, 20).Value = "extraA"
+        ws.Cells(r, 21).Value = "extraB"
+        r = r + 1
+    Next i
+    ws.Rows(1).Font.Bold = True
+    On Error Resume Next: Set lo = ws.ListObjects("tblJiraRaw"): On Error GoTo 0
+    If Not lo Is Nothing Then lo.Delete
+    Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range("A1").CurrentRegion, , xlYes)
+    lo.Name = "tblJiraRaw"
+End Sub
+
+Private Sub EnsureSampleIssuesSheetExpanded()
+    ' Create an expanded sample similar to a Jira Excel export so we can validate sanitization
+    Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Issues_Sample_Expanded")
+    Dim lo As ListObject
+    On Error Resume Next: Set lo = ws.ListObjects("tblJiraIssuesSampleExpanded"): On Error GoTo 0
+    If Not lo Is Nothing Then
+        If lo.ListRows.Count >= 40 Then Exit Sub
+    End If
+
+    ws.Cells.Clear
+    Dim hdrStrX As String
+    hdrStrX = "Summary|Issue key|Issue id|Issue Type|Status|Priority|Assignee|Reporter|" & _
+              "Created|Start Progress|Updated|Resolved|Due date|Environment|Description|" & _
+              "Sprint|Fix Version/s|Affects Version/s|Component/s|Labels|" & _
+              "Custom field (Epic Link)|Custom field (Story Points)|Custom field (Acceptance Criteria)|" & _
+              "Custom field (Risk)|Custom field (Severity)|Custom field (QA Owner)|Custom field (Target Date)|" & _
+              "URL|Extra A|Extra B"
+    Dim headers As Variant: headers = Split(hdrStrX, "|")
+
+    Dim i As Long
+    For i = LBound(headers) To UBound(headers)
+        ws.Cells(1, i + 1).Value = headers(i)
+    Next i
+
+    Dim base As Date: base = DateSerial(2025, 9, 10)
+    Dim spPool As Variant
+    spPool = Array(1,1,1,1,1,1, 2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3,3,3, 5,5,5,5,5,5,5,5, 8,8,8,8,8, 13,13,13)
+
+    Dim r As Long: r = 2
+    For i = 1 To 40
+        Dim t As String, st As String, pri As String
+        t = IIf(i Mod 10 = 0, "Bug", IIf(i Mod 5 = 0, "Task", "Story"))
+        pri = Choose(((i Mod 3) + 1), "Medium","High","Low")
+        If i Mod 10 = 0 Or i Mod 13 = 0 Then
+            st = "To Do"
+        ElseIf i Mod 6 = 0 Or i Mod 7 = 0 Then
+            st = "In Progress"
+        Else
+            st = "Done"
+        End If
+
+        Dim created As Date: created = base + ((i - 1) * 2 Mod 70)
+        Dim updated As Date: updated = created + ((i Mod 4) + 1)
+        Dim dueD As Date: dueD = created + 30
+        Dim sp As Variant: sp = spPool(i - 1)
+        Dim startProg As Variant, resolved As Variant
+        If st = "Done" Or sp = 13 Then
+            st = "Done"
+            Dim baseDays As Long: baseDays = sp * 2 + ((i Mod 5) - 2)
+            If baseDays < 1 Then baseDays = 1
+            Dim startOffset As Long: startOffset = Application.WorksheetFunction.Max(1, baseDays \ 3)
+            startProg = created + startOffset
+            resolved = created + baseDays
+        Else
+            startProg = ""
+            resolved = ""
+        End If
+
+        Dim sprintTag As String
+        If Month(created) = 9 Then
+            sprintTag = "2025.09.23"
+        ElseIf Month(created) = 10 Then
+            sprintTag = "2025.10.07"
+        Else
+            sprintTag = "2025.10.21"
+        End If
+
+        ' Write values directly to avoid line continuation limits
+        ws.Cells(r, 1).Value = "Expanded Item " & i
+        ws.Cells(r, 2).Value = "FIINT-" & CStr(4800 + i)
+        ws.Cells(r, 3).Value = 480000 + i * 12
+        ws.Cells(r, 4).Value = t
+        ws.Cells(r, 5).Value = st
+        ws.Cells(r, 6).Value = pri
+        ws.Cells(r, 7).Value = "User" & ((i Mod 5) + 1)
+        ws.Cells(r, 8).Value = "Reporter" & ((i Mod 3) + 1)
+        ws.Cells(r, 9).Value = created
+        ws.Cells(r, 10).Value = startProg
+        ws.Cells(r, 11).Value = updated
+        ws.Cells(r, 12).Value = resolved
+        ws.Cells(r, 13).Value = dueD
+        ws.Cells(r, 14).Value = IIf(i Mod 4 = 0, "Prod", "Test")
+        ws.Cells(r, 15).Value = "Lorem ipsum description " & i
+        ws.Cells(r, 16).Value = sprintTag
+        ws.Cells(r, 17).Value = sprintTag
+        ws.Cells(r, 18).Value = "v1.0"
+        ws.Cells(r, 19).Value = "Core"
+        ws.Cells(r, 20).Value = IIf(i Mod 4 = 0, "urgent", "")
+        ws.Cells(r, 21).Value = "EPIC-" & (100 + ((i - 1) Mod 6))
+        ws.Cells(r, 22).Value = sp
+        ws.Cells(r, 23).Value = "Given/When/Then..."
+        ws.Cells(r, 24).Value = Choose(((i Mod 3) + 1), "Low","Medium","High")
+        ws.Cells(r, 25).Value = Choose(((i Mod 3) + 1), "Minor","Major","Critical")
+        ws.Cells(r, 26).Value = "QA" & ((i Mod 4) + 1)
+        ws.Cells(r, 27).Value = created + 21
+        ws.Cells(r, 28).Value = "https://jira.example/browse/FIINT-" & CStr(4800 + i)
+        ws.Cells(r, 29).Value = "extraX"
+        ws.Cells(r, 30).Value = "extraY"
+        r = r + 1
+    Next i
+    ws.Rows(1).Font.Bold = True
+    On Error Resume Next: Set lo = ws.ListObjects("tblJiraIssuesSampleExpanded"): On Error GoTo 0
+    If Not lo Is Nothing Then lo.Delete
+    Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range("A1").CurrentRegion, , xlYes)
+    lo.Name = "tblJiraIssuesSampleExpanded"
+End Sub
+
 Public Sub Jira_NormalizeIssues(ByVal rawSheet As String, ByVal rawTable As String)
     On Error GoTo Fail
     Dim wsRaw As Worksheet: Set wsRaw = Worksheets(rawSheet)
@@ -1313,14 +1767,14 @@ Public Sub Jira_NormalizeIssues(ByVal rawSheet As String, ByVal rawTable As Stri
     On Error Resume Next: Set lo = ws.ListObjects("tblJiraFacts"): On Error GoTo 0
     If lo Is Nothing Then
         Dim headers As Variant
-        headers = Array("IssueKey","Summary","IssueType","Status","Epic","Created","Resolved","StoryPoints","CycleDays","SprintSpan","IsCrossSprint","QuarterTag","YearTag")
+        headers = Array("IssueKey","Summary","IssueType","Status","Epic","Created","StartProgress","Resolved","StoryPoints","CycleDays","SprintSpan","IsCrossSprint","QuarterTag","YearTag","FixVersion","CreatedMonth","CycleCalDays","LeadCalDays")
         Set lo = EnsureTable(ws, "tblJiraFacts", headers)
     Else
         If Not lo.DataBodyRange Is Nothing Then lo.DataBodyRange.ClearContents
     End If
 
     Dim r As ListRow, out As ListRow
-    Dim created As Date, resolved As Date, d As Double, span As Long, sp As Double
+    Dim created As Date, startProg As Date, resolved As Date, d As Double, span As Long, sp As Double
     Dim sprintLen As Long: sprintLen = CLng(Val(GetNameValueOr("SprintLengthDays", "10")))
     For Each r In loRaw.ListRows
         Set out = lo.ListRows.Add
@@ -1331,18 +1785,28 @@ Public Sub Jira_NormalizeIssues(ByVal rawSheet As String, ByVal rawTable As Stri
         out.Range(1, 5).Value = GetCellBy(loRaw, r, map, "Epic")
         created = ToDateSafe(GetCellBy(loRaw, r, map, "Created"))
         out.Range(1, 6).Value = created
+        startProg = ToDateSafe(GetCellBy(loRaw, r, map, "StartProgress"))
+        out.Range(1, 7).Value = startProg
         resolved = ToDateSafe(GetCellBy(loRaw, r, map, "Resolved"))
-        out.Range(1, 7).Value = resolved
+        out.Range(1, 8).Value = resolved
         sp = Val(GetCellBy(loRaw, r, map, "StoryPoints"))
-        out.Range(1, 8).Value = sp
+        out.Range(1, 9).Value = sp
         d = WorkdaysBetween(created, IIf(resolved = 0, Date, resolved))
-        out.Range(1, 9).Value = d
+        out.Range(1, 10).Value = d
         span = Application.WorksheetFunction.RoundUp(d / sprintLen, 0)
-        out.Range(1, 10).Value = span
-        out.Range(1, 11).Value = (span > 1)
+        out.Range(1, 11).Value = span
+        out.Range(1, 12).Value = (span > 1)
         Dim refDate As Date: refDate = IIf(resolved = 0, created, resolved)
-        out.Range(1, 12).Value = Year(refDate) & " Q" & Int((Month(refDate) - 1) / 3 + 1)
-        out.Range(1, 13).Value = Year(refDate)
+        out.Range(1, 13).Value = Year(refDate) & " Q" & Int((Month(refDate) - 1) / 3 + 1)
+        out.Range(1, 14).Value = Year(refDate)
+        ' FixVersion and CreatedMonth
+        out.Range(1, 15).Value = GetCellBy(loRaw, r, map, "FixVersion")
+        If created <> 0 Then out.Range(1, 16).Value = DateSerial(Year(created), Month(created), 1)
+        ' Calendar day metrics
+        If created <> 0 And resolved <> 0 Then
+            out.Range(1, 17).Value = DateDiff("d", created, resolved)
+            If startProg <> 0 Then out.Range(1, 18).Value = DateDiff("d", created, resolved) ' lead time same; cycle from start can be DateDiff("d", startProg, resolved)
+        End If
     Next r
 
     If IsVerbose() Then MsgBox "Jira facts built from " & rawTable & ".", vbInformation
@@ -1367,6 +1831,8 @@ Private Function Jira_BuildHeaderMap(ByVal lo As ListObject) As Object
     Call MapCol(idx, names, "Created", Array("created","created date","created on"))
     Call MapCol(idx, names, "Resolved", Array("resolved","resolved date","done date"))
     Call MapCol(idx, names, "StoryPoints", Array("story points","story point","story point estimate","custom field (story points)"))
+    Call MapCol(idx, names, "FixVersion", Array("fix version/s","fix version"))
+    Call MapCol(idx, names, "StartProgress", Array("start progress","started","in progress","in progress date","start date"))
     If idx.Count = 0 Then Set idx = Nothing
     Set Jira_BuildHeaderMap = idx
 End Function
@@ -1425,6 +1891,182 @@ Private Function WorkdaysBetween(ByVal d1 As Date, ByVal d2 As Date) As Long
     Loop
     WorkdaysBetween = n
 End Function
+
+Private Sub ComputeSummaryMetrics(ByVal lo As ListObject, ByRef avgCycle As Double, ByRef totalItems As Long, ByRef avgSPPerSprint As Double)
+    Dim idxCycle As Long, idxResolved As Long, idxSP As Long, idxFix As Long
+    On Error Resume Next
+    idxCycle = lo.ListColumns("CycleDays").Index
+    idxResolved = lo.ListColumns("Resolved").Index
+    idxSP = lo.ListColumns("StoryPoints").Index
+    idxFix = lo.ListColumns("FixVersion").Index
+    On Error GoTo 0
+    If idxCycle = 0 Or idxSP = 0 Then Exit Sub
+
+    Dim sumDays As Double, nDays As Long
+    Dim fixSums As Object: Set fixSums = CreateObject("Scripting.Dictionary")
+    Dim i As Long
+    For i = 1 To lo.ListRows.Count
+        Dim days As Double: days = Val(lo.DataBodyRange.Cells(i, idxCycle).Value)
+        If days > 0 Then
+            sumDays = sumDays + days
+            nDays = nDays + 1
+        End If
+        Dim sp As Double: sp = Val(lo.DataBodyRange.Cells(i, idxSP).Value)
+        Dim fx As String
+        If idxFix > 0 Then fx = CStr(lo.DataBodyRange.Cells(i, idxFix).Value)
+        If sp > 0 And Len(fx) > 0 And days > 0 Then
+            If Not fixSums.Exists(fx) Then fixSums(fx) = 0#
+            fixSums(fx) = CDbl(fixSums(fx)) + sp
+        End If
+    Next i
+    totalItems = lo.ListRows.Count
+    If nDays > 0 Then avgCycle = sumDays / nDays
+    If fixSums.Count > 0 Then
+        Dim sumSP As Double, k As Variant
+        For Each k In fixSums.Keys
+            sumSP = sumSP + CDbl(fixSums(k))
+        Next k
+        avgSPPerSprint = sumSP / fixSums.Count
+    End If
+End Sub
+
+Private Sub ComputeCycleCalendarStats(ByVal lo As ListObject, ByRef meanCT As Double, ByRef medCT As Double, ByRef sdCT As Double, ByRef outCount As Long)
+    Dim idx As Long
+    On Error Resume Next
+    idx = lo.ListColumns("CycleCalDays").Index
+    On Error GoTo 0
+    If idx = 0 Then Exit Sub
+    Dim vals() As Double
+    Dim n As Long: n = 0
+    Dim i As Long, v As Double
+    For i = 1 To lo.ListRows.Count
+        v = Val(lo.DataBodyRange.Cells(i, idx).Value)
+        If v > 0 Then
+            n = n + 1
+            ReDim Preserve vals(1 To n)
+            vals(n) = v
+        End If
+    Next i
+    If n = 0 Then Exit Sub
+    Dim wf As WorksheetFunction
+    Set wf = Application.WorksheetFunction
+    meanCT = wf.Average(vals)
+    medCT = wf.Median(vals)
+    If n > 1 Then sdCT = wf.StDev_S(vals)
+    Dim thr As Double: thr = meanCT + 2 * sdCT
+    For i = 1 To n
+        If vals(i) > thr Then outCount = outCount + 1
+    Next i
+End Sub
+
+Private Sub ComputeConsistencyPredictability(ByVal lo As ListObject, ByRef velocityStdev As Double, ByRef predictability As Variant)
+    ' velocity stdev based on completed SP by FixVersion in facts
+    Dim idxSP As Long, idxFix As Long
+    On Error Resume Next
+    idxSP = lo.ListColumns("StoryPoints").Index
+    idxFix = lo.ListColumns("FixVersion").Index
+    On Error GoTo 0
+    If idxSP > 0 And idxFix > 0 Then
+        Dim sums As Object: Set sums = CreateObject("Scripting.Dictionary")
+        Dim i As Long
+        For i = 1 To lo.ListRows.Count
+            Dim fx As String: fx = CStr(lo.DataBodyRange.Cells(i, idxFix).Value)
+            Dim sp As Double: sp = Val(lo.DataBodyRange.Cells(i, idxSP).Value)
+            If Len(fx) > 0 And sp > 0 Then
+                If Not sums.Exists(fx) Then sums(fx) = 0#
+                sums(fx) = CDbl(sums(fx)) + sp
+            End If
+        Next i
+        If sums.Count > 1 Then
+            Dim vals() As Double: ReDim vals(1 To sums.Count)
+            Dim k As Variant, j As Long: j = 0
+            For Each k In sums.Keys
+                j = j + 1: vals(j) = CDbl(sums(k))
+            Next k
+            velocityStdev = Application.WorksheetFunction.StDev_S(vals)
+        End If
+    End If
+    ' predictability from Jira_Metrics if present
+    predictability = Empty
+    On Error Resume Next
+    Dim ws As Worksheet: Set ws = Worksheets("Jira_Metrics")
+    Dim loM As ListObject: Set loM = ws.ListObjects("tblJiraMetrics")
+    On Error GoTo 0
+    If Not loM Is Nothing Then
+        Dim idxC As Long, idxK As Long, sumC As Double, sumK As Double
+        On Error Resume Next
+        idxC = loM.ListColumns("Completed").Index
+        idxK = loM.ListColumns("Committed").Index
+        On Error GoTo 0
+        If idxC > 0 And idxK > 0 Then
+            Dim r As ListRow
+            For Each r In loM.ListRows
+                sumC = sumC + Val(r.Range(1, idxC).Value)
+                sumK = sumK + Val(r.Range(1, idxK).Value)
+            Next r
+            If sumK > 0 Then predictability = sumC / sumK
+        End If
+    End If
+End Sub
+
+Private Function ComputeCorrelationSPCycle(ByVal lo As ListObject) As Variant
+    Dim idxSP As Long, idxCycle As Long
+    On Error Resume Next
+    idxSP = lo.ListColumns("StoryPoints").Index
+    idxCycle = lo.ListColumns("CycleDays").Index
+    On Error GoTo 0
+    If idxSP = 0 Or idxCycle = 0 Then Exit Function
+    Dim n As Long: n = 0
+    Dim sumX As Double, sumY As Double, sumXY As Double, sumX2 As Double, sumY2 As Double
+    Dim i As Long, x As Double, y As Double
+    For i = 1 To lo.ListRows.Count
+        x = Val(lo.DataBodyRange.Cells(i, idxSP).Value)
+        y = Val(lo.DataBodyRange.Cells(i, idxCycle).Value)
+        If x > 0 And y > 0 Then
+            n = n + 1
+            sumX = sumX + x
+            sumY = sumY + y
+            sumXY = sumXY + x * y
+            sumX2 = sumX2 + x * x
+            sumY2 = sumY2 + y * y
+        End If
+    Next i
+    If n < 2 Then Exit Function
+    Dim num As Double, den As Double
+    num = n * sumXY - sumX * sumY
+    den = Sqr((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY))
+    If den = 0 Then Exit Function
+    ComputeCorrelationSPCycle = num / den
+End Function
+
+Private Sub ComputeBottlenecks(ByVal lo As ListObject, ByRef avgWait As Double, ByRef avgExec As Double)
+    Dim idxCreated As Long, idxStart As Long, idxResolved As Long
+    On Error Resume Next
+    idxCreated = lo.ListColumns("Created").Index
+    idxStart = lo.ListColumns("StartProgress").Index
+    idxResolved = lo.ListColumns("Resolved").Index
+    On Error GoTo 0
+    If idxCreated = 0 Or idxResolved = 0 Then Exit Sub
+    Dim sumWait As Double, cntWait As Long
+    Dim sumExec As Double, cntExec As Long
+    Dim i As Long
+    For i = 1 To lo.ListRows.Count
+        Dim c As Variant, s As Variant, r As Variant
+        c = lo.DataBodyRange.Cells(i, idxCreated).Value
+        s = IIf(idxStart > 0, lo.DataBodyRange.Cells(i, idxStart).Value, 0)
+        r = lo.DataBodyRange.Cells(i, idxResolved).Value
+        If IsDate(c) And IsDate(r) Then
+            If IsDate(s) Then
+                sumWait = sumWait + DateDiff("d", CDate(c), CDate(s))
+                cntWait = cntWait + 1
+                sumExec = sumExec + DateDiff("d", CDate(s), CDate(r))
+                cntExec = cntExec + 1
+            End If
+        End If
+    Next i
+    If cntWait > 0 Then avgWait = sumWait / cntWait
+    If cntExec > 0 Then avgExec = sumExec / cntExec
+End Sub
 
 Public Sub Jira_CreateQueries()
     On Error GoTo Fail

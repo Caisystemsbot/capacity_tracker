@@ -24,3 +24,4 @@ Next actions
 Running work log
 - [2025-10-19] Repo reset to empty. Planning minimal baseline on `feature/restart`.
 - [2025-10-19] Added minimal single-module baseline, Getting_Started sheet, and docs (README, SCHEMA, GETTING_STARTED, ROADMAP, PTO_OPTIONS). No PTO automation yet.
+- [2025-10-27] On `feature/sanitize-only-button-and-sp-cycle`: removed "Build Jira Insights" button (use "Sanitize Raw + Build Insights"), and replaced the dashboard insights summary with average cycle time by story points (1,2,3,5,8,13). Updated JIRA_INTEGRATION docs.
