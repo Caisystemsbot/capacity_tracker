@@ -384,11 +384,12 @@ Private Sub Flow_WriteCFD_Data(ByVal lo As ListObject, ByVal ws As Worksheet, By
     ' Writes [Date | To Do | In Progress | Done] starting at topRow.
     ' Uses Created, StartProgress (optional), Resolved (optional). If StartProgress is
     ' missing, the In Progress series is skipped.
-    Dim idxC As Long, idxS As Long, idxR As Long
+    Dim idxC As Long, idxS As Long, idxR As Long, idxTodo As Long
     On Error Resume Next
     idxC = lo.ListColumns("Created").Index
     idxS = lo.ListColumns("StartProgress").Index
     idxR = lo.ListColumns("Resolved").Index
+    idxTodo = lo.ListColumns("TimeInTodo").Index
     On Error GoTo 0
     If idxC = 0 Then Exit Sub
 
@@ -429,7 +430,12 @@ Private Sub Flow_WriteCFD_Data(ByVal lo As ListObject, ByVal ws As Worksheet, By
             c = lo.DataBodyRange.Cells(i, idxC).Value
             If IsDate(c) Then
                 s = 0: r = 0
-                If idxS > 0 Then s = lo.DataBodyRange.Cells(i, idxS).Value
+                If idxS > 0 Then
+                    s = lo.DataBodyRange.Cells(i, idxS).Value
+                ElseIf idxTodo > 0 Then
+                    ' Derive a start-progress date from Created + TimeInTodo (days)
+                    If IsDate(c) Then s = CDate(c) + CDbl(Val(lo.DataBodyRange.Cells(i, idxTodo).Value))
+                End If
                 If idxR > 0 Then r = lo.DataBodyRange.Cells(i, idxR).Value
 
                 If (IsDate(r) And CDate(r) <= d) Then
@@ -1800,7 +1806,7 @@ Public Sub SanitizeRawAndBuildInsights()
     Dim srcSheet As String, srcTable As String
     Dim v As Variant
     v = Application.InputBox( _
-        Prompt:="Enter source sheet name (e.g., Jira_Raw or Jira_Issues_Sample_Expanded)", _
+        Prompt:="Enter source sheet name (e.g., Jira_Raw, Jira_Issues_Sample_Expanded, or WIP_Facts)", _
         Title:="Sanitize Source", Type:=2)
     If VarType(v) = vbBoolean And v = False Then GoTo CancelOp
     srcSheet = Trim$(CStr(v))
@@ -1847,13 +1853,28 @@ Public Sub SanitizeRawAndBuildInsights()
         End If
     End If
 
-    ' Normalize and build insights from selected sheet/table
-    Jira_NormalizeIssues ws.Name, srcTable
-    Jira_CreatePivotsAndCharts
-    ' Also build Flow Metrics charts (CFD, Throughput, Cycle Scatter)
-    On Error Resume Next
-    Flow_BuildCharts
-    On Error GoTo 0
+    ' If the selected table looks like WIP (time-in-status), skip Jira normalization and build flow charts
+    Dim loSrc As ListObject, isWip As Boolean
+    On Error Resume Next: Set loSrc = ws.ListObjects(srcTable): On Error GoTo 0
+    If Not loSrc Is Nothing Then
+        isWip = Flow_HasColumn(loSrc, "TimeInTodo") Or Flow_HasColumn(loSrc, "TimeInProgress") Or _
+                Flow_HasColumn(loSrc, "TimeInTesting") Or Flow_HasColumn(loSrc, "TimeInReview")
+    End If
+
+    If isWip Then
+        ' Build Flow metrics from WIP-like table only
+        On Error Resume Next
+        Flow_BuildCharts
+        On Error GoTo 0
+    Else
+        ' Normalize and build insights from selected sheet/table
+        Jira_NormalizeIssues ws.Name, srcTable
+        Jira_CreatePivotsAndCharts
+        ' Also build Flow Metrics charts (CFD, Throughput, Cycle Scatter)
+        On Error Resume Next
+        Flow_BuildCharts
+        On Error GoTo 0
+    End If
     LogOk "SanitizeRawAndBuildInsights"
     If IsVerbose() Then MsgBox "Sanitized '" & ws.Name & "' (" & srcTable & ") and updated insights.", vbInformation
     Exit Sub
