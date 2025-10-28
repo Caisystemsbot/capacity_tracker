@@ -257,6 +257,9 @@ Private Sub EnsureSheets()
     LogStart "EnsureRawDataSheet"
     EnsureRawDataSheet
     LogOk "EnsureRawDataSheet"
+
+    ' Remove legacy sample sheets the user no longer wants
+    RemoveLegacySampleSheets
     Exit Sub
 
 CoreFail:
@@ -265,6 +268,15 @@ CoreFail:
 ExpandedFail:
     LogErr "EnsureSheets", "EnsureRawDataSheet failed: Err " & Err.Number & ": " & Err.Description
     Resume Next
+End Sub
+
+Private Sub RemoveLegacySampleSheets()
+    On Error Resume Next
+    Application.DisplayAlerts = False
+    Worksheets("Jira_Issues_Sample").Delete
+    Worksheets("Jira_Raw").Delete
+    Application.DisplayAlerts = True
+    On Error GoTo 0
 End Sub
 
 Private Sub EnsureTables()
@@ -1713,7 +1725,8 @@ Private Sub Jira_CreatePivotsAndCharts()
 
     ' Build pivots (Epic summary removed by request)
     Dim pc As PivotCache
-    Set pc = wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=lo.Range)
+    ' Use external A1 address string for wider compatibility
+    Set pc = wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=lo.Range.Address(True, True, 1, True))
 
     ' Pivot 1 (renumbered): Story Point Distribution (rows SP, count issues)
     Dim pt2 As PivotTable
@@ -1901,9 +1914,9 @@ End Sub
 Public Sub RefreshSamples()
     On Error GoTo Fail
     LogStart "RefreshSamples"
-    EnsureSampleIssuesSheet
-    EnsureRawSampleSheet
-    EnsureSampleIssuesSheetExpanded
+    ' Only keep Raw_Data; remove legacy sample tabs
+    RemoveLegacySampleSheets
+    EnsureRawDataSheet
     LogOk "RefreshSamples"
     If IsVerbose() Then MsgBox "Sample sheets regenerated.", vbInformation
     Exit Sub
