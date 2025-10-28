@@ -1847,13 +1847,20 @@ Public Sub SanitizeRawAndBuildInsights()
     On Error GoTo 0
     If ws Is Nothing Then
         ' Offer to create known samples by name
-        If StrComp(Trim$(srcSheet), "Raw_Data", vbTextCompare) = 0 Then
+        If StrComp(Trim$(srcSheet), "Raw_Data", vbTextCompare) = 0 _
+           Or StrComp(Replace$(Trim$(srcSheet), " ", "_"), "Raw_Data", vbTextCompare) = 0 _
+           Or StrComp(Replace$(Trim$(srcSheet), "_", " "), "Raw Data", vbTextCompare) = 0 Then
             EnsureRawDataSheet
             Set ws = ThisWorkbook.Worksheets("Raw_Data")
-        ElseIf StrComp(Trim$(srcSheet), "WIP_Facts", vbTextCompare) = 0 Then
+        ElseIf StrComp(Trim$(srcSheet), "WIP_Facts", vbTextCompare) = 0 _
+           Or StrComp(Replace$(Trim$(srcSheet), " ", "_"), "WIP_Facts", vbTextCompare) = 0 _
+           Or StrComp(Replace$(Trim$(srcSheet), "_", " "), "WIP Facts", vbTextCompare) = 0 Then
             Dim w As Worksheet: Set w = EnsureSheet("WIP_Facts")
             Call EnsureWIPFactsTable(w)
             Set ws = w
+        Else
+            ' Try loose matching (ignore spaces/underscores/hyphens)
+            Set ws = FindSheetLoose(srcSheet)
         End If
         If ws Is Nothing Then Err.Raise 9, , "Sheet not found: " & srcSheet
     End If
@@ -1924,6 +1931,19 @@ Fail:
     LogErr "SanitizeRawAndBuildInsights", "Err " & Err.Number & ": " & Err.Description
     MsgBox "SanitizeRawAndBuildInsights failed: " & Err.Description, vbExclamation
 End Sub
+
+Private Function FindSheetLoose(ByVal nm As String) As Worksheet
+    Dim want As String
+    want = LCase$(Replace$(Replace$(Trim$(nm), "_", ""), " ", ""))
+    want = Replace$(want, "-", "")
+    Dim ws As Worksheet
+    For Each ws In ThisWorkbook.Worksheets
+        Dim got As String
+        got = LCase$(Replace$(Replace$(Trim$(ws.Name), "_", ""), " ", ""))
+        got = Replace$(got, "-", "")
+        If got = want Then Set FindSheetLoose = ws: Exit Function
+    Next ws
+End Function
 
 Public Sub RefreshSamples()
     On Error GoTo Fail
