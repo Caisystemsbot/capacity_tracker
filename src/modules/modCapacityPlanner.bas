@@ -1283,13 +1283,6 @@ Private Sub Jira_CreatePivotsAndCharts()
         .PivotFields("IssueKey").Function = xlCount
         On Error GoTo 0
     End With
-    ' Chart for Epic
-    Dim ch1 As ChartObject
-    Set ch1 = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(rowStart, 1).Top, Width:=420, Height:=260)
-    ch1.Chart.ChartType = xlColumnClustered
-    ch1.Chart.SetSourceData pt1.TableRange2
-    ch1.Chart.HasTitle = True
-    ch1.Chart.ChartTitle.Text = "Epic: Sum SP and Count"
 
     ' Pivot 2: Story Point Distribution (rows SP, count issues)
     Dim pt2 As PivotTable
@@ -1318,19 +1311,6 @@ Private Sub Jira_CreatePivotsAndCharts()
         .PivotFields("QuarterTag").Orientation = xlRowField
         .PivotFields("StoryPoints").Orientation = xlDataField
         .PivotFields("StoryPoints").Function = xlSum
-        .PivotFields("IssueKey").Orientation = xlDataField
-        .PivotFields("IssueKey").Function = xlCount
-        On Error GoTo 0
-    End With
-
-    ' Pivot 4: Cumulative Flow (Status by Created Month)
-    Dim pt4 As PivotTable
-    rowStart = pt3.TableRange2.Row + pt3.TableRange2.Rows.Count + 2
-    Set pt4 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:="ptCumulativeFlow")
-    With pt4
-        On Error Resume Next
-        .PivotFields("Status").Orientation = xlRowField
-        .PivotFields("CreatedMonth").Orientation = xlColumnField
         .PivotFields("IssueKey").Orientation = xlDataField
         .PivotFields("IssueKey").Function = xlCount
         On Error GoTo 0

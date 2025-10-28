@@ -41,3 +41,5 @@ Troubleshooting
 Insights layout changes
 - Removed the "Build Jira Insights" button; use "Sanitize Raw + Build Insights".
 - Replaced the "Throughput & Velocity" summary with a compact table of average cycle time by story points (1, 2, 3, 5, 8, 13).
+ - Removed the Epic chart ("Epic: Sum SP and Count").
+ - Removed the status table/pivot (Done / In Progress / To Do by Created Month).
