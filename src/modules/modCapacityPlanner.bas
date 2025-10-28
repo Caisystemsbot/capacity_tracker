@@ -91,7 +91,7 @@ Public Sub WIP_ImportCSV()
     WIP_MapCol idx, names, "IssueKey", Array("issue key","key","id","ticket")
     WIP_MapCol idx, names, "Summary", Array("summary","title")
     WIP_MapCol idx, names, "Created", Array("created","created date","created on")
-    WIP_MapCol idx, names, "Resolved", Array("resolved","done date","resolution date","closed")
+    WIP_MapCol idx, names, "Resolved", Array("resolved","resolved date","done date","resolution date","closed")
     WIP_MapCol idx, names, "TimeInTodo", Array("time in todo","time in to do","in todo","todo days")
     WIP_MapCol idx, names, "TimeInProgress", Array("time in progress","in progress","in progress days")
     WIP_MapCol idx, names, "TimeInTesting", Array("time in testing","in testing","testing days")
@@ -315,17 +315,15 @@ Public Sub Flow_BuildCharts()
 
     Dim nextTop As Long: nextTop = 3
 
-    ' 1) Cumulative Flow Diagram (WIP)
-    Flow_WriteCFD_Data lo, ws, nextTop
-    Flow_MakeCFD_Chart ws, nextTop
-    nextTop = Flow_NextFreeTop(ws)
+    ' (Removed) Cumulative Flow Diagram table (To Do / In Progress / Done)
+    ' Proceed with Throughput and Cycle Time charts only
 
-    ' 2) Throughput Run Chart (completed per day)
+    ' 1) Throughput Run Chart (completed per day)
     Flow_WriteThroughput_Data lo, ws, nextTop
     Flow_MakeThroughput_Chart ws, nextTop
     nextTop = Flow_NextFreeTop(ws)
 
-    ' 3) Cycle Time Scatter (completed vs days)
+    ' 2) Cycle Time Scatter (completed vs days)
     Flow_WriteCycleScatter_Data lo, ws, nextTop
     Flow_MakeCycleScatter_Chart ws, nextTop
 
@@ -363,9 +361,50 @@ Private Function Flow_FindFactsTable() As ListObject
 End Function
 
 Private Function Flow_HasColumn(ByVal lo As ListObject, ByVal name As String) As Boolean
-    On Error Resume Next
-    Flow_HasColumn = (lo.ListColumns(name).Index > 0)
-    On Error GoTo 0
+    Flow_HasColumn = (Flow_GetColIndex(lo, name) > 0)
+End Function
+
+Private Function Flow_GetColIndex(ByVal lo As ListObject, ByVal key As String) As Long
+    Dim names As Variant
+    Select Case LCase$(key)
+        Case "created"
+            names = Array("created", "created date", "created on", "created_date")
+        Case "resolved"
+            names = Array("resolved", "resolved date", "resolution date", "done date", "closed")
+        Case "startprogress"
+            names = Array("startprogress", "start progress", "started", "in progress date")
+        Case "timeintodo"
+            names = Array("time in todo", "time in to do", "in todo", "todo days")
+        Case "timeinprogress"
+            names = Array("time in progress", "in progress", "in progress days")
+        Case "timeintesting"
+            names = Array("time in testing", "in testing", "testing days")
+        Case "timeinreview"
+            names = Array("time in review", "in review", "review days")
+        Case Else
+            names = Array(key)
+    End Select
+    Flow_GetColIndex = Flow_Col(lo, names)
+End Function
+
+Private Function Flow_Col(ByVal lo As ListObject, ByVal candidates As Variant) As Long
+    Dim i As Long, j As Long
+    For i = 1 To lo.ListColumns.Count
+        Dim nm As String
+        nm = Norm(lo.ListColumns(i).Name)
+        For j = LBound(candidates) To UBound(candidates)
+            Dim cand As String
+            cand = Norm(CStr(candidates(j)))
+            If Len(cand) > 0 Then
+                If StrComp(nm, cand, vbTextCompare) = 0 _
+                   Or InStr(1, nm, cand, vbTextCompare) > 0 _
+                   Or InStr(1, cand, nm, vbTextCompare) > 0 Then
+                    Flow_Col = i
+                    Exit Function
+                End If
+            End If
+        Next j
+    Next i
 End Function
 
 Private Sub Flow_WriteCFD_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long)
@@ -373,12 +412,10 @@ Private Sub Flow_WriteCFD_Data(ByVal lo As ListObject, ByVal ws As Worksheet, By
     ' Uses Created, StartProgress (optional), Resolved (optional). If StartProgress is
     ' missing, the In Progress series is skipped.
     Dim idxC As Long, idxS As Long, idxR As Long, idxTodo As Long
-    On Error Resume Next
-    idxC = lo.ListColumns("Created").Index
-    idxS = lo.ListColumns("StartProgress").Index
-    idxR = lo.ListColumns("Resolved").Index
-    idxTodo = lo.ListColumns("TimeInTodo").Index
-    On Error GoTo 0
+    idxC = Flow_GetColIndex(lo, "Created")
+    idxS = Flow_GetColIndex(lo, "StartProgress")
+    idxR = Flow_GetColIndex(lo, "Resolved")
+    idxTodo = Flow_GetColIndex(lo, "TimeInTodo")
     If idxC = 0 Then Exit Sub
 
     Dim minD As Date, maxD As Date, todayD As Date: todayD = Date
@@ -459,7 +496,7 @@ End Sub
 Private Sub Flow_WriteThroughput_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long)
     ' Completed items per day based on Resolved
     Dim idxR As Long
-    On Error Resume Next: idxR = lo.ListColumns("Resolved").Index: On Error GoTo 0
+    idxR = Flow_GetColIndex(lo, "Resolved")
     If idxR = 0 Then Exit Sub
 
     Dim counts As Object: Set counts = CreateObject("Scripting.Dictionary")
@@ -513,11 +550,9 @@ End Sub
 Private Sub Flow_WriteCycleScatter_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long)
     ' Completed date vs cycle time (calendar days preferred), fallback to Resolved-Created
     Dim idxR As Long, idxC As Long, idxCal As Long
-    On Error Resume Next
-    idxR = lo.ListColumns("Resolved").Index
-    idxC = lo.ListColumns("Created").Index
-    idxCal = lo.ListColumns("CycleCalDays").Index
-    On Error GoTo 0
+    idxR = Flow_GetColIndex(lo, "Resolved")
+    idxC = Flow_GetColIndex(lo, "Created")
+    On Error Resume Next: idxCal = lo.ListColumns("CycleCalDays").Index: On Error GoTo 0
     If idxR = 0 Or idxC = 0 Then Exit Sub
 
     ws.Cells(topRow, 1).Value = "Cycle Time Scatter"
@@ -1676,25 +1711,14 @@ Private Sub Jira_CreatePivotsAndCharts()
         Next i2
     End If
 
-    ' Pivot 1: By Epic (Sum SP, Count Issues)
+    ' Build pivots (Epic summary removed by request)
     Dim pc As PivotCache
     Set pc = wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=lo.Range)
-    Dim pt1 As PivotTable
-    Dim rowStart As Long: rowStart = cycStart + 6
-    Set pt1 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:="ptEpic")
-    With pt1
-        On Error Resume Next
-        .PivotFields("Epic").Orientation = xlRowField
-        .PivotFields("StoryPoints").Orientation = xlDataField
-        .PivotFields("StoryPoints").Function = xlSum
-        .PivotFields("IssueKey").Orientation = xlDataField
-        .PivotFields("IssueKey").Function = xlCount
-        On Error GoTo 0
-    End With
 
-    ' Pivot 2: Story Point Distribution (rows SP, count issues)
+    ' Pivot 1 (renumbered): Story Point Distribution (rows SP, count issues)
     Dim pt2 As PivotTable
-    rowStart = pt1.TableRange2.Row + pt1.TableRange2.Rows.Count + 2
+    Dim rowStart As Long
+    rowStart = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 2
     Set pt2 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:="ptSPDist")
     With pt2
         On Error Resume Next
@@ -1710,7 +1734,7 @@ Private Sub Jira_CreatePivotsAndCharts()
     ch2.Chart.HasTitle = True
     ch2.Chart.ChartTitle.Text = "Story Point Distribution"
 
-    ' Pivot 3: Quarter summary
+    ' Pivot 2: Quarter summary
     Dim pt3 As PivotTable
     rowStart = pt2.TableRange2.Row + pt2.TableRange2.Rows.Count + 2
     Set pt3 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:="ptQuarter")

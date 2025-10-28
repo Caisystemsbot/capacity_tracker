@@ -28,3 +28,4 @@ Running work log
 - [2025-10-28] On `feature/remove-epic-chart-and-status-table`: removed Epic chart ("Epic: Sum SP and Count") and the Status table (Done/In Progress/To Do) from Insights build.
 - [2025-10-28] On `feature/flow-metrics-charts`: added pasteable `Flow_BuildCharts` to generate CFD (WIP), Throughput, and Cycle Time scatter from sanitized facts; added docs/FLOW_METRICS.md.
  - [2025-10-28] On `feature/wip-csv-sanitizer`: added `WIP_ImportCSV` to sanitize WIP CSV (time-in-status + dates) into `WIP_Facts!tblWIPFacts`; added `data/wip_example.csv` and docs/WIP_IMPORT.md.
+ - [2025-10-28] On `feature/remove-epic-chart-and-cfd-table`: removed Epic pivot (Sum SP + Count) from Jira_Insights and suppressed the CFD source table (To Do/In Progress/Done) in Flow_Metrics; added header mapping for "Resolved date" in WIP CSV import.
