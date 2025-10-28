@@ -1712,6 +1712,10 @@ Public Sub SanitizeRawAndBuildInsights()
     ' Normalize and build insights from selected sheet/table
     Jira_NormalizeIssues ws.Name, srcTable
     Jira_CreatePivotsAndCharts
+    ' Also build Flow Metrics charts (CFD, Throughput, Cycle Scatter)
+    On Error Resume Next
+    Flow_BuildCharts
+    On Error GoTo 0
     LogOk "SanitizeRawAndBuildInsights"
     If IsVerbose() Then MsgBox "Sanitized '" & ws.Name & "' (" & srcTable & ") and updated insights.", vbInformation
     Exit Sub
