@@ -49,6 +49,144 @@ Fail:
     Err.Raise Err.Number, , Err.Description
 End Sub
 
+' -------------------- WIP CSV Sanitizer --------------------
+
+' Import and sanitize a WIP CSV containing time-in-status durations and dates.
+' Expected columns (case/spacing flexible; extras ignored):
+' - Created (date-time)
+' - Resolved (date-time, optional)
+' - Time In Todo (days, decimal)
+' - Time In Progress (days, decimal)
+' - Time In Testing (days, decimal)
+' - Time In Review (days, decimal)
+' Optional pass-through if present: Issue key, Summary
+' Output goes to sheet WIP_Facts with table tblWIPFacts.
+Public Sub WIP_ImportCSV()
+    On Error GoTo Fail
+    LogStart "WIP_ImportCSV"
+
+    Dim path As String
+    path = PickFile("Pick WIP CSV with Created/Resolved and time-in-status columns")
+    If Len(Trim$(path)) = 0 Then GoTo CancelOp
+    If Not FileExists(path) Then Err.Raise 5, , "CSV not found: " & path
+
+    Dim ws As Worksheet: Set ws = EnsureSheet("WIP_Facts")
+    Dim lo As ListObject: Set lo = EnsureWIPFactsTable(ws)
+    If Not lo.DataBodyRange Is Nothing Then lo.DataBodyRange.ClearContents
+
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim ts As Object: Set ts = fso.OpenTextFile(path, 1)
+    If ts.AtEndOfStream Then Err.Raise 9, , "CSV empty: " & path
+
+    Dim header As String: header = ts.ReadLine
+    Dim cols As Variant: cols = Split(header, ",")
+    Dim names As Object: Set names = CreateObject("Scripting.Dictionary")
+    Dim i As Long
+    For i = LBound(cols) To UBound(cols)
+        names(Norm(CStr(cols(i)))) = i + 1 ' 1-based index for Split array
+    Next i
+
+    Dim idx As Object: Set idx = CreateObject("Scripting.Dictionary")
+    ' Map minimal and optional columns
+    WIP_MapCol idx, names, "IssueKey", Array("issue key","key","id","ticket")
+    WIP_MapCol idx, names, "Summary", Array("summary","title")
+    WIP_MapCol idx, names, "Created", Array("created","created date","created on")
+    WIP_MapCol idx, names, "Resolved", Array("resolved","done date","resolution date","closed")
+    WIP_MapCol idx, names, "TimeInTodo", Array("time in todo","time in to do","in todo","todo days")
+    WIP_MapCol idx, names, "TimeInProgress", Array("time in progress","in progress","in progress days")
+    WIP_MapCol idx, names, "TimeInTesting", Array("time in testing","in testing","testing days")
+    WIP_MapCol idx, names, "TimeInReview", Array("time in review","in review","review days")
+
+    If Not idx.Exists("Created") Then Err.Raise 1004, , "CSV missing 'Created' column"
+
+    Dim rowText As String
+    Do While Not ts.AtEndOfStream
+        rowText = ts.ReadLine
+        If Len(Trim$(rowText)) = 0 Then GoTo ContinueLoop
+        Dim parts As Variant: parts = Split(rowText, ",")
+        Dim r As ListRow: Set r = lo.ListRows.Add
+
+        ' Read values defensively
+        Dim created As Date, resolved As Date
+        created = ToDateSafe(WIP_Get(parts, idx, "Created"))
+        resolved = ToDateSafe(WIP_Get(parts, idx, "Resolved"))
+        Dim tTodo As Double, tProg As Double, tTest As Double, tRev As Double
+        tTodo = CDbl(Val(WIP_Get(parts, idx, "TimeInTodo")))
+        tProg = CDbl(Val(WIP_Get(parts, idx, "TimeInProgress")))
+        tTest = CDbl(Val(WIP_Get(parts, idx, "TimeInTesting")))
+        tRev = CDbl(Val(WIP_Get(parts, idx, "TimeInReview")))
+        Dim total As Double: total = 0#
+        If tTodo > 0 Then total = total + tTodo
+        If tProg > 0 Then total = total + tProg
+        If tTest > 0 Then total = total + tTest
+        If tRev > 0 Then total = total + tRev
+
+        ' Write output row
+        r.Range(1, 1).Value = WIP_Get(parts, idx, "IssueKey")
+        r.Range(1, 2).Value = WIP_Get(parts, idx, "Summary")
+        r.Range(1, 3).Value = created
+        r.Range(1, 4).Value = resolved
+        r.Range(1, 5).Value = tTodo
+        r.Range(1, 6).Value = tProg
+        r.Range(1, 7).Value = tTest
+        r.Range(1, 8).Value = tRev
+        r.Range(1, 9).Value = total ' WIPTotalDays
+        If created <> 0 And resolved <> 0 Then r.Range(1, 10).Value = DateDiff("d", created, resolved) ' CycleCalDays
+ContinueLoop:
+    Loop
+    ts.Close
+
+    ws.Columns("A:J").AutoFit
+    LogOk "WIP_ImportCSV"
+    If IsVerbose() Then MsgBox "WIP CSV imported to 'WIP_Facts'.", vbInformation
+    Exit Sub
+CancelOp:
+    LogErr "WIP_ImportCSV", "Cancelled by user"
+    Exit Sub
+Fail:
+    LogErr "WIP_ImportCSV", "Err " & Err.Number & ": " & Err.Description
+    MsgBox "WIP_ImportCSV failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Function EnsureWIPFactsTable(ByVal ws As Worksheet) As ListObject
+    Dim headers As Variant
+    headers = Array("IssueKey","Summary","Created","Resolved","TimeInTodo","TimeInProgress","TimeInTesting","TimeInReview","WIPTotalDays","CycleCalDays")
+    Dim lo As ListObject
+    On Error Resume Next: Set lo = ws.ListObjects("tblWIPFacts"): On Error GoTo 0
+    If lo Is Nothing Then
+        Set lo = EnsureTable(ws, "tblWIPFacts", headers)
+    Else
+        ' if header mismatch, rebuild
+        Dim ok As Boolean: ok = (lo.ListColumns.Count = (UBound(headers) - LBound(headers) + 1))
+        If ok Then
+            Dim i As Long
+            For i = 1 To lo.ListColumns.Count
+                If StrComp(lo.ListColumns(i).Name, headers(LBound(headers) + i - 1), vbTextCompare) <> 0 Then ok = False: Exit For
+            Next i
+        End If
+        If Not ok Then
+            On Error Resume Next: lo.Delete: On Error GoTo 0
+            Set lo = EnsureTable(ws, "tblWIPFacts", headers)
+        End If
+    End If
+    Set EnsureWIPFactsTable = lo
+End Function
+
+Private Sub WIP_MapCol(ByVal idx As Object, ByVal names As Object, ByVal key As String, ByVal candidates As Variant)
+    Dim j As Long
+    For j = LBound(candidates) To UBound(candidates)
+        Dim k As String: k = Norm(CStr(candidates(j)))
+        Dim found As Variant: found = FindByContains(names, k)
+        If Not IsEmpty(found) Then idx(key) = CLng(found): Exit Sub
+    Next j
+End Sub
+
+Private Function WIP_Get(ByVal parts As Variant, ByVal idx As Object, ByVal key As String) As String
+    On Error Resume Next
+    Dim p As Long: p = idx(key)
+    If p > 0 And p <= UBound(parts) + 1 Then WIP_Get = CStr(parts(p - 1))
+End Function
+
 Private Sub Step_EnsureTables()
     On Error GoTo Fail
     LogStart "EnsureTables"
