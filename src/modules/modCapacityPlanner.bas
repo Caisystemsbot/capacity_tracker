@@ -1029,6 +1029,54 @@ Private Sub LogDbg(ByVal tag As String, ByVal details As String)
     LogEvent "DEBUG:" & tag, "INFO", details
 End Sub
 
+Public Sub Diagnostics_ExportLogsCsv()
+    On Error GoTo Fail
+    Dim ws As Worksheet: Set ws = EnsureSheet("Logs")
+    Dim lo As ListObject
+    On Error Resume Next: Set lo = ws.ListObjects("tblLogs"): On Error GoTo 0
+    If lo Is Nothing Or lo.ListRows.Count = 0 Then
+        MsgBox "No logs to export.", vbInformation
+        Exit Sub
+    End If
+    Dim base As String: base = ThisWorkbook.Path
+    If Len(base) = 0 Then base = Environ$("USERPROFILE")
+    Dim fn As String
+    fn = base & Application.PathSeparator & "logs_" & Format$(Now, "yyyymmdd_HHMMss") & ".csv"
+    Dim fso As Object, ts As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set ts = fso.CreateTextFile(fn, True, False)
+    Dim r As Long, c As Long
+    ' header
+    For c = 1 To lo.ListColumns.Count
+        If c > 1 Then ts.Write ","
+        ts.Write EscapeCsv(lo.HeaderRowRange.Cells(1, c).Value)
+    Next c
+    ts.WriteLine
+    ' rows
+    For r = 1 To lo.ListRows.Count
+        For c = 1 To lo.ListColumns.Count
+            If c > 1 Then ts.Write ","
+            ts.Write EscapeCsv(lo.DataBodyRange.Cells(r, c).Value)
+        Next c
+        ts.WriteLine
+    Next r
+    ts.Close
+    MsgBox "Logs exported to: " & fn, vbInformation
+    Exit Sub
+Fail:
+    MsgBox "Failed to export logs: " & Err.Description, vbExclamation
+End Sub
+
+Private Function EscapeCsv(ByVal v As Variant) As String
+    Dim s As String: s = CStr(v)
+    If InStr(1, s, ",") > 0 Or InStr(1, s, Chr(34)) > 0 Or InStr(1, s, vbCr) > 0 Or InStr(1, s, vbLf) > 0 Then
+        s = Replace$(s, """", """""")
+        EscapeCsv = """" & s & """"
+    Else
+        EscapeCsv = s
+    End If
+End Function
+
 Public Sub Diagnostics_RunBootstrap()
     On Error Resume Next
     ThisWorkbook.Names("VerboseLogging").RefersToRange.Value = True
