@@ -322,6 +322,9 @@ Public Sub Flow_BuildCharts(Optional ByVal loSelected As ListObject)
         MsgBox "Could not find a facts table with Created/Resolved columns.", vbExclamation
         Exit Sub
     End If
+    On Error Resume Next
+    LogDbg "Flow_Source", "Sheet=" & lo.Parent.Name & "; Table=" & lo.Name & "; rows=" & lo.ListRows.Count & "; cols=" & lo.ListColumns.Count
+    On Error GoTo 0
 
     Dim ws As Worksheet
     Set ws = EnsureSheet("Flow_Metrics")
@@ -570,6 +573,10 @@ Private Sub Flow_WriteCycleScatter_Data(ByVal lo As ListObject, ByVal ws As Work
     idxC = Flow_GetColIndex(lo, "Created")
     On Error Resume Next: idxCal = lo.ListColumns("CycleCalDays").Index: On Error GoTo 0
     If idxR = 0 Or idxC = 0 Then Exit Sub
+    On Error Resume Next
+    LogDbg "Flow_Scatter_Idx", "Sheet=" & lo.Parent.Name & "; Table=" & lo.Name & _
+          "; idxR=" & idxR & "; idxC=" & idxC & "; idxCal=" & idxCal & "; rows=" & lo.ListRows.Count
+    On Error GoTo 0
 
     ws.Cells(topRow, 1).Value = "Cycle Time Scatter"
     ws.Cells(topRow, 1).Font.Bold = True
@@ -615,6 +622,16 @@ Private Sub Flow_MakeCycleScatter_Chart(ByVal ws As Worksheet, ByVal topRow As L
     ch.Chart.HasTitle = True
     ch.Chart.ChartTitle.Text = "Cycle Time Scatter"
 End Sub
+
+Private Function ColumnsSummary(ByVal lo As ListObject) As String
+    On Error Resume Next
+    Dim i As Long, s As String
+    s = "rows=" & lo.ListRows.Count & "; cols=" & lo.ListColumns.Count & "; names="
+    For i = 1 To lo.ListColumns.Count
+        s = s & IIf(i > 1, " | ", " ") & CStr(lo.ListColumns(i).Name)
+    Next i
+    ColumnsSummary = s
+End Function
 
 Private Function Flow_NextFreeTop(ByVal ws As Worksheet) As Long
     ' Find the next free Y position to place another block ~ 16 rows below last used row
@@ -1004,6 +1021,12 @@ End Sub
 
 Private Sub LogErr(ByVal action As String, Optional ByVal details As String = "")
     LogEvent action, "ERROR", details
+End Sub
+
+' Lightweight debug logger to the Logs sheet
+Private Sub LogDbg(ByVal tag As String, ByVal details As String)
+    If Len(details) = 0 Then details = "(no details)"
+    LogEvent "DEBUG:" & tag, "INFO", details
 End Sub
 
 Public Sub Diagnostics_RunBootstrap()
@@ -1831,6 +1854,7 @@ End Sub
 Public Sub SanitizeRawAndBuildInsights()
     On Error GoTo Fail
     LogStart "SanitizeRawAndBuildInsights"
+    Dim dbg As String
 
     Dim srcSheet As String, srcTable As String
     Dim v As Variant
@@ -1894,6 +1918,12 @@ Public Sub SanitizeRawAndBuildInsights()
         isWip = Flow_HasColumn(loSrc, "TimeInTodo") Or Flow_HasColumn(loSrc, "TimeInProgress") Or _
                 Flow_HasColumn(loSrc, "TimeInTesting") Or Flow_HasColumn(loSrc, "TimeInReview")
     End If
+    On Error Resume Next
+    dbg = "Resolved ws='" & ws.Name & "' table='" & srcTable & "' isWip=" & CStr(isWip) & _
+          "; tables on ws=" & ws.ListObjects.Count
+    LogDbg "Sanitize_Source", dbg
+    If Not loSrc Is Nothing Then LogDbg "Sanitize_TableCols", ColumnsSummary(loSrc)
+    On Error GoTo 0
 
     If isWip Then
         ' Build Flow metrics from WIP-like table only
@@ -1912,6 +1942,7 @@ Public Sub SanitizeRawAndBuildInsights()
         Set loFacts = Nothing
         Set wsFacts = Worksheets("Jira_Facts")
         If Not wsFacts Is Nothing Then On Error Resume Next: Set loFacts = wsFacts.ListObjects("tblJiraFacts"): On Error GoTo 0
+        If Not loFacts Is Nothing Then LogDbg "Jira_Facts", ColumnsSummary(loFacts)
         If loFacts Is Nothing Then
             Flow_BuildCharts ' fallback search
         Else
@@ -1928,7 +1959,8 @@ CancelOp:
     Exit Sub
 
 Fail:
-    LogErr "SanitizeRawAndBuildInsights", "Err " & Err.Number & ": " & Err.Description
+    LogErr "SanitizeRawAndBuildInsights", "Err " & Err.Number & ": " & Err.Description & _
+           " | ctx: ws='" & IIf(ws Is Nothing, "(n/a)", ws.Name) & "' table='" & srcTable & "'"
     MsgBox "SanitizeRawAndBuildInsights failed: " & Err.Description, vbExclamation
 End Sub
 
