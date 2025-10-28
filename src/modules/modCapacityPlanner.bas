@@ -345,6 +345,16 @@ Public Sub Flow_BuildCharts(Optional ByVal loSelected As ListObject)
     ' 2) Cycle Time Scatter (completed vs days)
     Flow_WriteCycleScatter_Data lo, ws, nextTop
     Flow_MakeCycleScatter_Chart ws, nextTop
+    
+    ' 3) WIP Aging (if time-in-status columns exist and there are unresolved items)
+    If Flow_HasColumn(lo, "TimeInTodo") Or Flow_HasColumn(lo, "TimeInProgress") Or _
+       Flow_HasColumn(lo, "TimeInTesting") Or Flow_HasColumn(lo, "TimeInReview") Then
+        If Flow_HasUnresolved(lo) Then
+            nextTop = Flow_NextFreeTop(ws)
+            Flow_WriteWIPAging_Data lo, ws, nextTop
+            Flow_MakeWIPAging_Chart ws, nextTop
+        End If
+    End If
 
     ws.Columns("A:Z").AutoFit
     LogOk "Flow_BuildCharts"
@@ -640,6 +650,130 @@ Private Function Flow_NextFreeTop(ByVal ws As Worksheet) As Long
     If last < 1 Then last = 1
     Flow_NextFreeTop = last + 3
 End Function
+
+Private Function Flow_HasUnresolved(ByVal lo As ListObject) As Boolean
+    Dim idxR As Long, i As Long
+    idxR = Flow_GetColIndex(lo, "Resolved")
+    If idxR = 0 Then Exit Function
+    On Error Resume Next
+    For i = 1 To lo.ListRows.Count
+        If Not IsDate(lo.DataBodyRange.Cells(i, idxR).Value) Then
+            Flow_HasUnresolved = True
+            Exit Function
+        End If
+    Next i
+End Function
+
+Private Sub Flow_WriteWIPAging_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long)
+    Dim idxR As Long, idxTodo As Long, idxProg As Long, idxTest As Long, idxRev As Long
+    idxR = Flow_GetColIndex(lo, "Resolved")
+    idxTodo = Flow_GetColIndex(lo, "TimeInTodo")
+    idxProg = Flow_GetColIndex(lo, "TimeInProgress")
+    idxTest = Flow_GetColIndex(lo, "TimeInTesting")
+    idxRev = Flow_GetColIndex(lo, "TimeInReview")
+    If idxR = 0 Then Exit Sub
+    If (idxTodo + idxProg + idxTest + idxRev) = 0 Then Exit Sub
+
+    ws.Cells(topRow, 1).Value = "WIP Aging"
+    ws.Cells(topRow, 1).Font.Bold = True
+
+    ' We will write separate X/Y blocks per stage to make 4 series
+    Dim rowStart As Long: rowStart = topRow + 2
+    Dim lanes(1 To 4) As String
+    lanes(1) = "To Do": lanes(2) = "In Progress": lanes(3) = "Testing": lanes(4) = "Review"
+
+    Dim laneRows(1 To 4) As Long, i As Long
+    For i = 1 To 4: laneRows(i) = rowStart: Next i
+
+    Dim r As Long, cTodo As Double, cProg As Double, cTest As Double, cRev As Double, age As Double
+    For r = 1 To lo.ListRows.Count
+        If Not IsDate(lo.DataBodyRange.Cells(r, idxR).Value) Then
+            cTodo = IIf(idxTodo > 0, Val(lo.DataBodyRange.Cells(r, idxTodo).Value), 0#)
+            cProg = IIf(idxProg > 0, Val(lo.DataBodyRange.Cells(r, idxProg).Value), 0#)
+            cTest = IIf(idxTest > 0, Val(lo.DataBodyRange.Cells(r, idxTest).Value), 0#)
+            cRev = IIf(idxRev > 0, Val(lo.DataBodyRange.Cells(r, idxRev).Value), 0#)
+            age = cTodo + cProg + cTest + cRev
+
+            Dim stage As Integer: stage = 1
+            If cRev > 0 Then stage = 4 _
+            ElseIf cTest > 0 Then stage = 3 _
+            ElseIf cProg > 0 Then stage = 2 _
+            Else stage = 1
+
+            ' X lane position with slight jitter based on running count
+            Dim pos As Double, offset As Double
+            offset = ((laneRows(stage) - rowStart) Mod 7) * 0.03 - 0.09
+            pos = stage + offset
+            ws.Cells(laneRows(stage), 1).Value = pos ' X
+            ws.Cells(laneRows(stage), 2).Value = age ' Y
+            laneRows(stage) = laneRows(stage) + 1
+        End If
+    Next r
+
+    ' Headers for data blocks
+    ws.Cells(topRow + 1, 1).Resize(1, 2).Value = Array("X", "AgeDays")
+    ws.Cells(topRow + 1, 1).Resize(1, 2).Font.Bold = True
+    
+    ' Lane labels under chart area (for visual reference)
+    ws.Cells(laneRows(1) + 1, 1).Value = "1 = To Do | 2 = In Progress | 3 = Testing | 4 = Review"
+End Sub
+
+Private Sub Flow_MakeWIPAging_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
+    Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column + 1).End(xlUp).Row
+    If lastRow <= hdr.Row + 1 Then Exit Sub
+
+    ' Build 4 series by filtering rows based on X (1±jitter, 2±jitter, ...)
+    Dim ch As ChartObject
+    Set ch = ws.ChartObjects.Add(Left:=20, Top:=ws.Cells(topRow + 1, 1).Top, Width:=560, Height:=320)
+    ch.Chart.ChartType = xlXYScatter
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartTitle.Text = "WIP Aging (days) by Stage"
+
+    Dim rngX As Range, rngY As Range
+    Dim r As Long, x As Double, y As Double
+    ' Copy rows into temporary hidden columns C:D grouped per lane to form clean series
+    Dim lanes(1 To 4) As Long, startRow As Long: startRow = lastRow + 2
+    Dim laneNames As Variant: laneNames = Array("To Do", "In Progress", "Testing", "Review")
+    Dim i As Long
+    For i = 1 To 4: lanes(i) = startRow: Next i
+
+    For r = hdr.Row + 2 To lastRow
+        x = Val(ws.Cells(r, 1).Value)
+        y = Val(ws.Cells(r, 2).Value)
+        If y > 0 Then
+            Dim lane As Integer: lane = WorksheetFunction.Round(x, 0)
+            If lane >= 1 And lane <= 4 Then
+                ws.Cells(lanes(lane), 3).Value = x
+                ws.Cells(lanes(lane), 4).Value = y
+                lanes(lane) = lanes(lane) + 1
+            End If
+        End If
+    Next r
+
+    For i = 1 To 4
+        If lanes(i) > startRow Then
+            Set rngX = ws.Range(ws.Cells(startRow, 3), ws.Cells(lanes(i) - 1, 3))
+            Set rngY = ws.Range(ws.Cells(startRow, 4), ws.Cells(lanes(i) - 1, 4))
+            With ch.Chart.SeriesCollection.NewSeries
+                .XValues = rngX
+                .Values = rngY
+                .Name = CStr(laneNames(i - 1))
+            End With
+            startRow = lanes(i) ' next block continues after prior data
+        End If
+    Next i
+
+    With ch.Chart.Axes(1) ' xlCategory
+        .MinimumScale = 0.5
+        .MaximumScale = 4.5
+        .HasMajorGridlines = True
+        .HasMinorGridlines = False
+    End With
+    With ch.Chart.Axes(2) ' xlValue
+        .HasMajorGridlines = True
+    End With
+End Sub
 
 Private Sub SeedNamedValues()
     Dim ws As Worksheet: Set ws = EnsureConfig()
