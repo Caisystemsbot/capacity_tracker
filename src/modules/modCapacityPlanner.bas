@@ -252,36 +252,18 @@ Private Sub EnsureSheets()
     If m Is Nothing Then Err.Raise 91, , "Failed to create Metrics sheet"
     If Not HasTable(m, "tblMetrics") Then EnsureMetricsSheet
 
-    ' Provide a baked-in sample issues sheet for analysis (no macro needed)
-    On Error GoTo SampleIssuesFail
-    LogStart "EnsureSampleIssuesSheet"
-    EnsureSampleIssuesSheet
-    LogOk "EnsureSampleIssuesSheet"
-
-    ' Provide an optional raw sheet with many columns to mimic Jira export
-    On Error GoTo RawFail
-    LogStart "EnsureRawSampleSheet"
-    EnsureRawSampleSheet
-    LogOk "EnsureRawSampleSheet"
-
-    ' Expanded issues sample for sanitization demonstration
+    ' Provide a single Raw_Data sample with time-in-status columns
     On Error GoTo ExpandedFail
-    LogStart "EnsureSampleIssuesSheetExpanded"
-    EnsureSampleIssuesSheetExpanded
-    LogOk "EnsureSampleIssuesSheetExpanded"
+    LogStart "EnsureRawDataSheet"
+    EnsureRawDataSheet
+    LogOk "EnsureRawDataSheet"
     Exit Sub
 
 CoreFail:
     LogErr "EnsureSheets", "Core sheet creation failed: Err " & Err.Number & ": " & Err.Description
     Err.Raise Err.Number
-SampleIssuesFail:
-    LogErr "EnsureSheets", "EnsureSampleIssuesSheet failed: Err " & Err.Number & ": " & Err.Description
-    Resume Next
-RawFail:
-    LogErr "EnsureSheets", "EnsureRawSampleSheet failed: Err " & Err.Number & ": " & Err.Description
-    Resume Next
 ExpandedFail:
-    LogErr "EnsureSheets", "EnsureSampleIssuesSheetExpanded failed: Err " & Err.Number & ": " & Err.Description
+    LogErr "EnsureSheets", "EnsureRawDataSheet failed: Err " & Err.Number & ": " & Err.Description
     Resume Next
 End Sub
 
@@ -357,18 +339,24 @@ Fail:
 End Sub
 
 Private Function Flow_FindFactsTable() As ListObject
-    ' Prefer Jira_Facts!tblJiraFacts if present; otherwise scan tables for Created/Resolved
+    ' Prefer a non-empty Jira_Facts!tblJiraFacts; else first table with Created and Resolved/CycleCalDays with rows
     On Error Resume Next
     Dim ws As Worksheet, lo As ListObject
     Set ws = Worksheets("Jira_Facts"): If Not ws Is Nothing Then Set lo = ws.ListObjects("tblJiraFacts")
     On Error GoTo 0
-    If Not lo Is Nothing Then Set Flow_FindFactsTable = lo: Exit Function
+    If Not lo Is Nothing Then
+        On Error Resume Next
+        If Not lo.DataBodyRange Is Nothing Then If lo.ListRows.Count > 0 Then Set Flow_FindFactsTable = lo: Exit Function
+        On Error GoTo 0
+    End If
 
     For Each ws In ThisWorkbook.Worksheets
         For Each lo In ws.ListObjects
             If Flow_HasColumn(lo, "Created") And (Flow_HasColumn(lo, "Resolved") Or Flow_HasColumn(lo, "CycleCalDays")) Then
-                Set Flow_FindFactsTable = lo
-                Exit Function
+                If Not lo.DataBodyRange Is Nothing Then If lo.ListRows.Count > 0 Then
+                    Set Flow_FindFactsTable = lo
+                    Exit Function
+                End If
             End If
         Next lo
     Next ws
@@ -1806,7 +1794,7 @@ Public Sub SanitizeRawAndBuildInsights()
     Dim srcSheet As String, srcTable As String
     Dim v As Variant
     v = Application.InputBox( _
-        Prompt:="Enter source sheet name (e.g., Jira_Raw, Jira_Issues_Sample_Expanded, or WIP_Facts)", _
+        Prompt:="Enter source sheet name (e.g., Raw_Data or WIP_Facts)", _
         Title:="Sanitize Source", Type:=2)
     If VarType(v) = vbBoolean And v = False Then GoTo CancelOp
     srcSheet = Trim$(CStr(v))
@@ -1818,15 +1806,13 @@ Public Sub SanitizeRawAndBuildInsights()
     On Error GoTo 0
     If ws Is Nothing Then
         ' Offer to create known samples by name
-        If StrComp(Trim$(srcSheet), "Jira_Raw", vbTextCompare) = 0 Then
-            EnsureRawSampleSheet
-            Set ws = ThisWorkbook.Worksheets("Jira_Raw")
-        ElseIf StrComp(Trim$(srcSheet), "Jira_Issues_Sample_Expanded", vbTextCompare) = 0 Then
-            EnsureSampleIssuesSheetExpanded
-            Set ws = ThisWorkbook.Worksheets("Jira_Issues_Sample_Expanded")
-        ElseIf StrComp(Trim$(srcSheet), "Jira_Issues_Sample", vbTextCompare) = 0 Then
-            EnsureSampleIssuesSheet
-            Set ws = ThisWorkbook.Worksheets("Jira_Issues_Sample")
+        If StrComp(Trim$(srcSheet), "Raw_Data", vbTextCompare) = 0 Then
+            EnsureRawDataSheet
+            Set ws = ThisWorkbook.Worksheets("Raw_Data")
+        ElseIf StrComp(Trim$(srcSheet), "WIP_Facts", vbTextCompare) = 0 Then
+            Dim w As Worksheet: Set w = EnsureSheet("WIP_Facts")
+            Call EnsureWIPFactsTable(w)
+            Set ws = w
         End If
         If ws Is Nothing Then Err.Raise 9, , "Sheet not found: " & srcSheet
     End If
@@ -1837,7 +1823,7 @@ Public Sub SanitizeRawAndBuildInsights()
     Else
         ' Try common table names first
         Dim tryName As Variant, lo As ListObject
-        For Each tryName In Array("tblJiraRaw", "tblJiraIssuesSampleExpanded", "tblJiraIssuesSample")
+        For Each tryName In Array("tblRawData", "tblWIPFacts", "tblJiraFacts")
             On Error Resume Next
             Set lo = ws.ListObjects(CStr(tryName))
             On Error GoTo 0
@@ -2068,23 +2054,26 @@ Private Sub EnsureRawSampleSheet()
 End Sub
 
 Private Sub EnsureSampleIssuesSheetExpanded()
-    ' Create an expanded sample similar to a Jira Excel export so we can validate sanitization
-    Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Issues_Sample_Expanded")
+    ' Deprecated in favor of EnsureRawDataSheet
+End Sub
+
+Private Sub EnsureRawDataSheet()
+    ' Create a Raw_Data sheet including time-in-status durations and date-time fields
+    Dim ws As Worksheet: Set ws = EnsureSheet("Raw_Data")
     Dim lo As ListObject
-    On Error Resume Next: Set lo = ws.ListObjects("tblJiraIssuesSampleExpanded"): On Error GoTo 0
+    On Error Resume Next: Set lo = ws.ListObjects("tblRawData"): On Error GoTo 0
     If Not lo Is Nothing Then
         If lo.ListRows.Count >= 40 Then Exit Sub
     End If
 
     ws.Cells.Clear
-    Dim hdrStrX As String
-    hdrStrX = "Summary|Issue key|Issue id|Issue Type|Status|Priority|Assignee|Reporter|" & _
-              "Created|Start Progress|Updated|Resolved|Due date|Environment|Description|" & _
-              "Sprint|Fix Version/s|Affects Version/s|Component/s|Labels|" & _
-              "Custom field (Epic Link)|Custom field (Story Points)|Custom field (Acceptance Criteria)|" & _
-              "Custom field (Risk)|Custom field (Severity)|Custom field (QA Owner)|Custom field (Target Date)|" & _
-              "URL|Extra A|Extra B"
-    Dim headers As Variant: headers = Split(hdrStrX, "|")
+    Dim hdr As String
+    hdr = "Summary|Issue key|Issue id|Issue Type|Status|Priority|Assignee|Reporter|" & _
+          "Created|Start Progress|Updated|Resolved|" & _
+          "Time In Todo|Time In Progress|Time In Testing|Time In Review|" & _
+          "Fix Version/s|Component/s|Labels|" & _
+          "Custom field (Epic Link)|Custom field (Story Points)|URL"
+    Dim headers As Variant: headers = Split(hdr, "|")
 
     Dim i As Long
     For i = LBound(headers) To UBound(headers)
@@ -2100,78 +2089,53 @@ Private Sub EnsureSampleIssuesSheetExpanded()
         Dim t As String, st As String, pri As String
         t = IIf(i Mod 10 = 0, "Bug", IIf(i Mod 5 = 0, "Task", "Story"))
         pri = Choose(((i Mod 3) + 1), "Medium","High","Low")
-        If i Mod 10 = 0 Or i Mod 13 = 0 Then
-            st = "To Do"
-        ElseIf i Mod 6 = 0 Or i Mod 7 = 0 Then
-            st = "In Progress"
-        Else
-            st = "Done"
-        End If
+        st = "Done"
 
-        Dim created As Date: created = base + ((i - 1) * 2 Mod 70)
-        Dim updated As Date: updated = created + ((i Mod 4) + 1)
-        Dim dueD As Date: dueD = created + 30
+        ' Base created with time-of-day
+        Dim created As Date: created = base + ((i - 1) * 2 Mod 70) + TimeSerial((i * 2) Mod 24, (i * 7) Mod 60, 0)
         Dim sp As Variant: sp = spPool(i - 1)
-        Dim startProg As Variant, resolved As Variant
-        If st = "Done" Or sp = 13 Then
-            st = "Done"
-            Dim baseDays As Long: baseDays = sp * 2 + ((i Mod 5) - 2)
-            If baseDays < 1 Then baseDays = 1
-            Dim startOffset As Long: startOffset = Application.WorksheetFunction.Max(1, baseDays \ 3)
-            startProg = created + startOffset
-            resolved = created + baseDays
-        Else
-            startProg = ""
-            resolved = ""
-        End If
 
-        Dim sprintTag As String
-        If Month(created) = 9 Then
-            sprintTag = "2025.09.23"
-        ElseIf Month(created) = 10 Then
-            sprintTag = "2025.10.07"
-        Else
-            sprintTag = "2025.10.21"
-        End If
+        ' Time-in-status (days, decimals)
+        Dim tTodo As Double, tProg As Double, tTest As Double, tRev As Double
+        tTodo = Round(0.05 + ((i Mod 5) * 0.11), 2)
+        tProg = Round(0.25 + ((sp Mod 8) * 0.35), 2)
+        tTest = Round(((i Mod 4) * 0.12), 2)
+        tRev = Round(((i Mod 3) * 0.10), 2)
 
-        ' Write values directly to avoid line continuation limits
-        ws.Cells(r, 1).Value = "Expanded Item " & i
-        ws.Cells(r, 2).Value = "FIINT-" & CStr(4800 + i)
-        ws.Cells(r, 3).Value = 480000 + i * 12
+        Dim startProg As Date: startProg = created + tTodo
+        Dim updated As Date: updated = startProg + tProg
+        Dim resolved As Date: resolved = created + tTodo + tProg + tTest + tRev
+
+        ' Write values
+        ws.Cells(r, 1).Value = "Raw Item " & i
+        ws.Cells(r, 2).Value = "FIINT-" & CStr(5800 + i)
+        ws.Cells(r, 3).Value = 580000 + i * 11
         ws.Cells(r, 4).Value = t
         ws.Cells(r, 5).Value = st
         ws.Cells(r, 6).Value = pri
         ws.Cells(r, 7).Value = "User" & ((i Mod 5) + 1)
         ws.Cells(r, 8).Value = "Reporter" & ((i Mod 3) + 1)
         ws.Cells(r, 9).Value = created
-        ws.Cells(r, 10).Value = startProg
-        ws.Cells(r, 11).Value = updated
-        ws.Cells(r, 12).Value = resolved
-        ws.Cells(r, 13).Value = dueD
-        ws.Cells(r, 14).Value = IIf(i Mod 4 = 0, "Prod", "Test")
-        ws.Cells(r, 15).Value = "Lorem ipsum description " & i
-        ws.Cells(r, 16).Value = sprintTag
-        ws.Cells(r, 17).Value = sprintTag
-        ws.Cells(r, 18).Value = "v1.0"
-        ws.Cells(r, 19).Value = "Core"
-        ws.Cells(r, 20).Value = IIf(i Mod 4 = 0, "urgent", "")
-        ws.Cells(r, 21).Value = "EPIC-" & (100 + ((i - 1) Mod 6))
-        ws.Cells(r, 22).Value = sp
-        ws.Cells(r, 23).Value = "Given/When/Then..."
-        ws.Cells(r, 24).Value = Choose(((i Mod 3) + 1), "Low","Medium","High")
-        ws.Cells(r, 25).Value = Choose(((i Mod 3) + 1), "Minor","Major","Critical")
-        ws.Cells(r, 26).Value = "QA" & ((i Mod 4) + 1)
-        ws.Cells(r, 27).Value = created + 21
-        ws.Cells(r, 28).Value = "https://jira.example/browse/FIINT-" & CStr(4800 + i)
-        ws.Cells(r, 29).Value = "extraX"
-        ws.Cells(r, 30).Value = "extraY"
+        ws.Cells(r,10).Value = startProg
+        ws.Cells(r,11).Value = updated
+        ws.Cells(r,12).Value = resolved
+        ws.Cells(r,13).Value = tTodo
+        ws.Cells(r,14).Value = tProg
+        ws.Cells(r,15).Value = tTest
+        ws.Cells(r,16).Value = tRev
+        ws.Cells(r,17).Value = Choose(((Month(created)-8) Mod 3)+1, "2025.09.23","2025.10.07","2025.10.21")
+        ws.Cells(r,18).Value = "Core"
+        ws.Cells(r,19).Value = IIf(i Mod 4 = 0, "urgent", "")
+        ws.Cells(r,20).Value = "EPIC-" & (100 + ((i - 1) Mod 6))
+        ws.Cells(r,21).Value = sp
+        ws.Cells(r,22).Value = "https://jira.example/browse/FIINT-" & CStr(5800 + i)
         r = r + 1
     Next i
     ws.Rows(1).Font.Bold = True
-    On Error Resume Next: Set lo = ws.ListObjects("tblJiraIssuesSampleExpanded"): On Error GoTo 0
+    On Error Resume Next: Set lo = ws.ListObjects("tblRawData"): On Error GoTo 0
     If Not lo Is Nothing Then lo.Delete
     Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range("A1").CurrentRegion, , xlYes)
-    lo.Name = "tblJiraIssuesSampleExpanded"
+    lo.Name = "tblRawData"
 End Sub
 
 Public Sub Jira_NormalizeIssues(ByVal rawSheet As String, ByVal rawTable As String)
