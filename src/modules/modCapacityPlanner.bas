@@ -1974,10 +1974,22 @@ Public Sub SanitizeRawAndBuildInsights()
     On Error GoTo 0
 
     If isWip Then
-        ' Build Flow metrics from WIP-like table only
+        ' Build Flow metrics from WIP-like table
         On Error Resume Next
         Flow_BuildCharts loSrc
         On Error GoTo 0
+        ' If the WIP-like table also looks Jira-like, also build Jira Insights
+        Dim mHdr As Object
+        On Error Resume Next
+        Set mHdr = Jira_BuildHeaderMap(loSrc)
+        On Error GoTo 0
+        If Not mHdr Is Nothing Then
+            On Error Resume Next
+            LogDbg "Sanitize_AlsoJira", "Detected Jira-like headers; building Insights too"
+            Jira_NormalizeIssues ws.Name, srcTable
+            Jira_CreatePivotsAndCharts
+            On Error GoTo 0
+        End If
     Else
         ' Normalize and build insights from selected sheet/table
         Jira_NormalizeIssues ws.Name, srcTable
