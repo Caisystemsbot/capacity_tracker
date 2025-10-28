@@ -1,0 +1,36 @@
+# Flow Metrics Charts (Pasteable)
+
+Overview
+- Builds Scrum flow metrics directly in Excel from a sanitized facts table.
+- Creates a new sheet `Flow_Metrics` with three charts:
+  - Cumulative Flow Diagram (stacked To Do / In Progress / Done)
+  - Throughput Run Chart (completed items per day)
+  - Cycle Time Scatter (Resolved date vs cycle time in days)
+- Defensive by design: if a needed column is missing, the affected chart is skipped.
+
+Data assumptions
+- Preferred source: sheet `Jira_Facts` with table `tblJiraFacts`.
+- Auto-detection: if not found, the macro scans all tables and picks one that has:
+  - Required: `Created`
+  - Plus one of: `Resolved` or `CycleCalDays` (resolved still required for charts)
+  - Optional: `StartProgress` to compute the In Progress band for the CFD
+
+Column usage
+- `Created` (date): work item creation date
+- `StartProgress` (date, optional): first time work started
+- `Resolved` (date, optional): completion date
+- `CycleCalDays` (number, optional): calendar-day cycle time; falls back to Resolved - Created
+
+How to run
+- Paste or import the module `src/modules/modCapacityPlanner.bas` into your .xlsm.
+- Run the macro `Flow_BuildCharts`.
+- The sheet `Flow_Metrics` will be created or refreshed with data blocks and charts.
+
+Notes
+- CFD (WIP) uses dates from `Created` to max(`Resolved`) and rolls daily counts:
+  - To Do: Created ≤ d and (StartProgress > d or StartProgress missing)
+  - In Progress: StartProgress ≤ d and (Resolved > d or missing)
+  - Done: Resolved ≤ d
+- If the range exceeds ~120 days, it limits the CFD window to ~90 recent days for readability.
+- Throughput is a simple count of items by `Resolved` date.
+- Cycle Time scatter prefers `CycleCalDays`; otherwise uses `Resolved - Created`.

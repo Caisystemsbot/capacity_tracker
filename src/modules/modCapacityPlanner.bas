@@ -15,6 +15,8 @@ Private Const xlDataField As Long = 4
 Private Const xlSum As Long = -4157
 Private Const xlCount As Long = -4112
 Private Const xlColumnClustered As Long = 51
+Private Const xlAreaStacked As Long = 76
+Private Const xlXYScatter As Long = -4169
 
 Public Sub Bootstrap()
     On Error GoTo Fail
@@ -164,6 +166,280 @@ RosterFail:
 LogsFail:
     LogErr "EnsureLogsTable", "Err " & Err.Number & ": " & Err.Description
 End Sub
+
+' -------------------- Flow Metrics (pasteable entrypoint) --------------------
+
+' Build core Flow Metrics charts (CFD/WIP, Throughput, Cycle Time) from a
+' sanitized facts table. No setup required: detects a likely facts table
+' automatically and creates a new sheet named "Flow_Metrics".
+' - CFD/WIP (stacked To Do / In Progress / Done by day)
+' - Throughput run chart (items completed per day)
+' - Cycle Time scatter (Completed date vs days)
+' The code is defensive: if a required column is missing, that chart is skipped.
+Public Sub Flow_BuildCharts()
+    On Error GoTo Fail
+    LogStart "Flow_BuildCharts"
+
+    Dim lo As ListObject
+    Set lo = Flow_FindFactsTable()
+    If lo Is Nothing Then
+        MsgBox "Could not find a facts table with Created/Resolved columns.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim ws As Worksheet
+    Set ws = EnsureSheet("Flow_Metrics")
+    ws.Cells.Clear
+    ws.Range("A1").Value = "Flow Metrics"
+    ws.Range("A1").Font.Bold = True
+
+    Dim nextTop As Long: nextTop = 3
+
+    ' 1) Cumulative Flow Diagram (WIP)
+    Flow_WriteCFD_Data lo, ws, nextTop
+    Flow_MakeCFD_Chart ws, nextTop
+    nextTop = Flow_NextFreeTop(ws)
+
+    ' 2) Throughput Run Chart (completed per day)
+    Flow_WriteThroughput_Data lo, ws, nextTop
+    Flow_MakeThroughput_Chart ws, nextTop
+    nextTop = Flow_NextFreeTop(ws)
+
+    ' 3) Cycle Time Scatter (completed vs days)
+    Flow_WriteCycleScatter_Data lo, ws, nextTop
+    Flow_MakeCycleScatter_Chart ws, nextTop
+
+    ws.Columns("A:Z").AutoFit
+    LogOk "Flow_BuildCharts"
+    If IsVerbose() Then MsgBox "Flow metrics charts created on 'Flow_Metrics'.", vbInformation
+    Exit Sub
+Fail:
+    LogErr "Flow_BuildCharts", "Err " & Err.Number & ": " & Err.Description
+    MsgBox "Flow_BuildCharts failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Function Flow_FindFactsTable() As ListObject
+    ' Prefer Jira_Facts!tblJiraFacts if present; otherwise scan tables for Created/Resolved
+    On Error Resume Next
+    Dim ws As Worksheet, lo As ListObject
+    Set ws = Worksheets("Jira_Facts"): If Not ws Is Nothing Then Set lo = ws.ListObjects("tblJiraFacts")
+    On Error GoTo 0
+    If Not lo Is Nothing Then Set Flow_FindFactsTable = lo: Exit Function
+
+    For Each ws In ThisWorkbook.Worksheets
+        For Each lo In ws.ListObjects
+            If Flow_HasColumn(lo, "Created") And (Flow_HasColumn(lo, "Resolved") Or Flow_HasColumn(lo, "CycleCalDays")) Then
+                Set Flow_FindFactsTable = lo
+                Exit Function
+            End If
+        Next lo
+    Next ws
+End Function
+
+Private Function Flow_HasColumn(ByVal lo As ListObject, ByVal name As String) As Boolean
+    On Error Resume Next
+    Flow_HasColumn = (lo.ListColumns(name).Index > 0)
+    On Error GoTo 0
+End Function
+
+Private Sub Flow_WriteCFD_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long)
+    ' Writes [Date | To Do | In Progress | Done] starting at topRow.
+    ' Uses Created, StartProgress (optional), Resolved (optional). If StartProgress is
+    ' missing, the In Progress series is skipped.
+    Dim idxC As Long, idxS As Long, idxR As Long
+    On Error Resume Next
+    idxC = lo.ListColumns("Created").Index
+    idxS = lo.ListColumns("StartProgress").Index
+    idxR = lo.ListColumns("Resolved").Index
+    On Error GoTo 0
+    If idxC = 0 Then Exit Sub
+
+    Dim minD As Date, maxD As Date, todayD As Date: todayD = Date
+    Dim i As Long, c As Variant, s As Variant, r As Variant
+    Dim hasAny As Boolean: hasAny = False
+    For i = 1 To lo.ListRows.Count
+        c = lo.DataBodyRange.Cells(i, idxC).Value
+        If IsDate(c) Then
+            If Not hasAny Then minD = CDate(c): maxD = CDate(c): hasAny = True
+            If CDate(c) < minD Then minD = CDate(c)
+            If CDate(c) > maxD Then maxD = CDate(c)
+        End If
+        If idxR > 0 Then
+            r = lo.DataBodyRange.Cells(i, idxR).Value
+            If IsDate(r) Then If CDate(r) > maxD Then maxD = CDate(r)
+        End If
+    Next i
+    If Not hasAny Then Exit Sub
+    If maxD < minD Then maxD = minD
+
+    ' Limit to last ~90 days for readability if range is too long
+    If DateDiff("d", minD, maxD) > 120 Then minD = DateAdd("d", -90, maxD)
+
+    ' Headers
+    ws.Cells(topRow, 1).Value = "CFD (WIP)"
+    ws.Cells(topRow, 1).Font.Bold = True
+    ws.Cells(topRow + 1, 1).Resize(1, 4).Value = Array("Date", "To Do", "In Progress", "Done")
+    ws.Cells(topRow + 1, 1).Resize(1, 4).Font.Bold = True
+
+    Dim row As Long: row = topRow + 2
+    Dim d As Date
+    For d = minD To maxD
+        Dim toDo As Long: toDo = 0
+        Dim inProg As Long: inProg = 0
+        Dim doneC As Long: doneC = 0
+        For i = 1 To lo.ListRows.Count
+            c = lo.DataBodyRange.Cells(i, idxC).Value
+            If IsDate(c) Then
+                s = 0: r = 0
+                If idxS > 0 Then s = lo.DataBodyRange.Cells(i, idxS).Value
+                If idxR > 0 Then r = lo.DataBodyRange.Cells(i, idxR).Value
+
+                If (IsDate(r) And CDate(r) <= d) Then
+                    doneC = doneC + 1
+                ElseIf (idxS > 0 And IsDate(s) And CDate(s) <= d And (Not IsDate(r) Or CDate(r) > d)) Then
+                    inProg = inProg + 1
+                ElseIf CDate(c) <= d Then
+                    toDo = toDo + 1
+                End If
+            End If
+        Next i
+        ws.Cells(row, 1).Value = d
+        ws.Cells(row, 2).Value = toDo
+        ws.Cells(row, 3).Value = IIf(idxS > 0, inProg, Empty)
+        ws.Cells(row, 4).Value = doneC
+        row = row + 1
+    Next d
+End Sub
+
+Private Sub Flow_MakeCFD_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
+    ' Build stacked area chart over the CFD block
+    Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
+    If lastRow <= hdr.Row + 1 Then Exit Sub
+    Dim ch As ChartObject
+    Set ch = ws.ChartObjects.Add(Left:=380, Top:=ws.Cells(topRow + 1, 1).Top, Width:=540, Height:=280)
+    ch.Chart.ChartType = xlAreaStacked
+    ch.Chart.SetSourceData ws.Range(ws.Cells(hdr.Row, hdr.Column), ws.Cells(lastRow, hdr.Column + 3))
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartTitle.Text = "Cumulative Flow (WIP)"
+End Sub
+
+Private Sub Flow_WriteThroughput_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long)
+    ' Completed items per day based on Resolved
+    Dim idxR As Long
+    On Error Resume Next: idxR = lo.ListColumns("Resolved").Index: On Error GoTo 0
+    If idxR = 0 Then Exit Sub
+
+    Dim counts As Object: Set counts = CreateObject("Scripting.Dictionary")
+    Dim i As Long, r As Variant, d As Date, key As String
+    For i = 1 To lo.ListRows.Count
+        r = lo.DataBodyRange.Cells(i, idxR).Value
+        If IsDate(r) Then
+            d = DateSerial(Year(r), Month(r), Day(r))
+            key = CStr(d)
+            If Not counts.Exists(key) Then counts(key) = 0
+            counts(key) = counts(key) + 1
+        End If
+    Next i
+    If counts.Count = 0 Then Exit Sub
+
+    ' Sort keys
+    Dim keys() As Variant: keys = counts.Keys
+    Dim j As Long, k As Long
+    For j = LBound(keys) To UBound(keys) - 1
+        For k = j + 1 To UBound(keys)
+            If CDate(keys(k)) < CDate(keys(j)) Then
+                Dim t As Variant: t = keys(j): keys(j) = keys(k): keys(k) = t
+            End If
+        Next k
+    Next j
+
+    ws.Cells(topRow, 1).Value = "Throughput"
+    ws.Cells(topRow, 1).Font.Bold = True
+    ws.Cells(topRow + 1, 1).Resize(1, 2).Value = Array("Date", "Completed")
+    ws.Cells(topRow + 1, 1).Resize(1, 2).Font.Bold = True
+    Dim row As Long: row = topRow + 2
+    For j = LBound(keys) To UBound(keys)
+        ws.Cells(row, 1).Value = CDate(keys(j))
+        ws.Cells(row, 2).Value = counts(keys(j))
+        row = row + 1
+    Next j
+End Sub
+
+Private Sub Flow_MakeThroughput_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
+    Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
+    If lastRow <= hdr.Row + 1 Then Exit Sub
+    Dim ch As ChartObject
+    Set ch = ws.ChartObjects.Add(Left:=380, Top:=ws.Cells(topRow + 1, 1).Top, Width:=540, Height:=240)
+    ch.Chart.ChartType = xlColumnClustered
+    ch.Chart.SetSourceData ws.Range(ws.Cells(hdr.Row, hdr.Column), ws.Cells(lastRow, hdr.Column + 1))
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartTitle.Text = "Throughput (Completed per Day)"
+End Sub
+
+Private Sub Flow_WriteCycleScatter_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long)
+    ' Completed date vs cycle time (calendar days preferred), fallback to Resolved-Created
+    Dim idxR As Long, idxC As Long, idxCal As Long
+    On Error Resume Next
+    idxR = lo.ListColumns("Resolved").Index
+    idxC = lo.ListColumns("Created").Index
+    idxCal = lo.ListColumns("CycleCalDays").Index
+    On Error GoTo 0
+    If idxR = 0 Or idxC = 0 Then Exit Sub
+
+    ws.Cells(topRow, 1).Value = "Cycle Time Scatter"
+    ws.Cells(topRow, 1).Font.Bold = True
+    ws.Cells(topRow + 1, 1).Resize(1, 2).Value = Array("ResolvedDate", "Days")
+    ws.Cells(topRow + 1, 1).Resize(1, 2).Font.Bold = True
+
+    Dim row As Long: row = topRow + 2
+    Dim i As Long, r As Variant, c As Variant, d As Double
+    For i = 1 To lo.ListRows.Count
+        r = lo.DataBodyRange.Cells(i, idxR).Value
+        c = lo.DataBodyRange.Cells(i, idxC).Value
+        If IsDate(r) And IsDate(c) Then
+            If idxCal > 0 Then
+                d = Val(lo.DataBodyRange.Cells(i, idxCal).Value)
+                If d <= 0 Then d = DateDiff("d", CDate(c), CDate(r))
+            Else
+                d = DateDiff("d", CDate(c), CDate(r))
+            End If
+            If d >= 0 Then
+                ws.Cells(row, 1).Value = CDate(r)
+                ws.Cells(row, 2).Value = d
+                row = row + 1
+            End If
+        End If
+    Next i
+End Sub
+
+Private Sub Flow_MakeCycleScatter_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
+    Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
+    If lastRow <= hdr.Row + 1 Then Exit Sub
+    Dim rngX As Range, rngY As Range
+    Set rngX = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+    Set rngY = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + 1), ws.Cells(lastRow, hdr.Column + 1))
+    Dim ch As ChartObject
+    Set ch = ws.ChartObjects.Add(Left:=20, Top:=ws.Cells(topRow + 1, 1).Top, Width:=340, Height:=260)
+    ch.Chart.ChartType = xlXYScatter
+    With ch.Chart.SeriesCollection.NewSeries
+        .XValues = rngX
+        .Values = rngY
+        .Name = "=Cycle Time"
+    End With
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartTitle.Text = "Cycle Time Scatter"
+End Sub
+
+Private Function Flow_NextFreeTop(ByVal ws As Worksheet) As Long
+    ' Find the next free Y position to place another block ~ 16 rows below last used row
+    Dim last As Long
+    last = ws.UsedRange.Row + ws.UsedRange.Rows.Count - 1
+    If last < 1 Then last = 1
+    Flow_NextFreeTop = last + 3
+End Function
 
 Private Sub SeedNamedValues()
     Dim ws As Worksheet: Set ws = EnsureConfig()

@@ -25,4 +25,5 @@ Running work log
 - [2025-10-19] Repo reset to empty. Planning minimal baseline on `feature/restart`.
 - [2025-10-19] Added minimal single-module baseline, Getting_Started sheet, and docs (README, SCHEMA, GETTING_STARTED, ROADMAP, PTO_OPTIONS). No PTO automation yet.
 - [2025-10-27] On `feature/sanitize-only-button-and-sp-cycle`: removed "Build Jira Insights" button (use "Sanitize Raw + Build Insights"), and replaced the dashboard insights summary with average cycle time by story points (1,2,3,5,8,13). Updated JIRA_INTEGRATION docs.
- - [2025-10-28] On `feature/remove-epic-chart-and-status-table`: removed Epic chart ("Epic: Sum SP and Count") and the Status table (Done/In Progress/To Do) from Insights build.
+- [2025-10-28] On `feature/remove-epic-chart-and-status-table`: removed Epic chart ("Epic: Sum SP and Count") and the Status table (Done/In Progress/To Do) from Insights build.
+ - [2025-10-28] On `feature/flow-metrics-charts`: added pasteable `Flow_BuildCharts` to generate CFD (WIP), Throughput, and Cycle Time scatter from sanitized facts; added docs/FLOW_METRICS.md.
