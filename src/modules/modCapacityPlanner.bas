@@ -308,12 +308,16 @@ End Sub
 ' - Throughput run chart (items completed per day)
 ' - Cycle Time scatter (Completed date vs days)
 ' The code is defensive: if a required column is missing, that chart is skipped.
-Public Sub Flow_BuildCharts()
+Public Sub Flow_BuildCharts(Optional ByVal loSelected As ListObject)
     On Error GoTo Fail
     LogStart "Flow_BuildCharts"
 
     Dim lo As ListObject
-    Set lo = Flow_FindFactsTable()
+    If loSelected Is Nothing Then
+        Set lo = Flow_FindFactsTable()
+    Else
+        Set lo = loSelected
+    End If
     If lo Is Nothing Then
         MsgBox "Could not find a facts table with Created/Resolved columns.", vbExclamation
         Exit Sub
@@ -1887,7 +1891,7 @@ Public Sub SanitizeRawAndBuildInsights()
     If isWip Then
         ' Build Flow metrics from WIP-like table only
         On Error Resume Next
-        Flow_BuildCharts
+        Flow_BuildCharts loSrc
         On Error GoTo 0
     Else
         ' Normalize and build insights from selected sheet/table
@@ -1895,7 +1899,17 @@ Public Sub SanitizeRawAndBuildInsights()
         Jira_CreatePivotsAndCharts
         ' Also build Flow Metrics charts (CFD, Throughput, Cycle Scatter)
         On Error Resume Next
-        Flow_BuildCharts
+        Dim loFacts As ListObject
+        Dim wsFacts As Worksheet
+        Set wsFacts = Nothing
+        Set loFacts = Nothing
+        Set wsFacts = Worksheets("Jira_Facts")
+        If Not wsFacts Is Nothing Then On Error Resume Next: Set loFacts = wsFacts.ListObjects("tblJiraFacts"): On Error GoTo 0
+        If loFacts Is Nothing Then
+            Flow_BuildCharts ' fallback search
+        Else
+            Flow_BuildCharts loFacts
+        End If
         On Error GoTo 0
     End If
     LogOk "SanitizeRawAndBuildInsights"
