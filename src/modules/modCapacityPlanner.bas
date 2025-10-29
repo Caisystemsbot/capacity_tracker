@@ -1,5 +1,4 @@
 Option Explicit
-Option Private Module
 
 ' Compile-time feature flags
 #Const FLOW_OVERLAY_SHAPES = 0 ' Set to 1 to draw WIP backdrop/labels as shapes
@@ -2388,12 +2387,30 @@ End Function
 Public Sub CreateTeamAvailability()
     On Error GoTo Fail
     LogStart "CreateTeamAvailability"
-    Dim yr As Integer, q As Integer, s As Integer
-    If Not PromptForQuarterSprint(yr, q, s) Then Exit Sub
-    Dim sStart As Date: sStart = QuarterStartDate(yr, q) + (s - 1) * 14
+    Dim sStart As Date
+    ' Date-first prompt; confirm/override sprint tag after date
+    Dim dt As Date
+    dt = PromptForDate("Enter sprint start date (MM/DD/YYYY)")
+    If dt <> 0 Then
+        sStart = dt
+        Dim defTag As String: defTag = FormatSprintTag(sStart)
+        Dim tagInput As String
+        tagInput = InputBox("Enter sprint tag (e.g., '2025 Q4 S3')", "Sprint Tag", defTag)
+        If Len(Trim$(tagInput)) = 0 Then Exit Sub
+        CreateTeamAvailabilityAtDate sStart, Nothing, Trim$(tagInput)
+        LogOk "CreateTeamAvailability"
+        Exit Sub
+    End If
 
-    CreateTeamAvailabilityAtDate sStart, Nothing
-    LogOk "CreateTeamAvailability"
+    ' Fallback: Y/Q/S prompt if no date provided
+    Dim yr As Integer, q As Integer, s As Integer
+    If PromptForQuarterSprint(yr, q, s) Then
+        sStart = QuarterStartDate(yr, q) + (s - 1) * 14
+        CreateTeamAvailabilityAtDate sStart, Nothing, FormatSprintTagYQS(yr, q, s)
+        LogOk "CreateTeamAvailability"
+        Exit Sub
+    End If
+    ' User canceled both prompts
     Exit Sub
 Fail:
     LogErr "CreateTeamAvailability", "Err " & Err.Number & " (Erl=" & Erl & "): " & Err.Description
@@ -2424,7 +2441,22 @@ Public Sub CreateOrAdvanceAvailability()
         End If
     End If
     Dim nextStart As Date: nextStart = DateAdd("d", 14, lastStart)
-    CreateTeamAvailabilityAtDate nextStart, last
+    ' Derive next sprint tag by incrementing last sheet's tag (do not assume from date)
+    Dim oYr As Integer, oQ As Integer, oS As Integer
+    Dim overrideTag As String
+    If ParseTagFromName(last.Name, oYr, oQ, oS) Then
+        oS = oS + 1
+        If oS > 7 Then
+            oS = 1
+            oQ = oQ + 1
+            If oQ > 4 Then
+                oQ = 1
+                oYr = oYr + 1
+            End If
+        End If
+        overrideTag = FormatSprintTagYQS(oYr, oQ, oS)
+    End If
+    CreateTeamAvailabilityAtDate nextStart, last, overrideTag
     LogOk "CreateOrAdvanceAvailability"
     Exit Sub
 Fail:
@@ -2432,25 +2464,29 @@ Fail:
     MsgBox "CreateOrAdvanceAvailability failed: " & Err.Description, vbExclamation
 End Sub
 
-Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As Worksheet)
+Private Sub CreateTeamAvailabilityAtDate(ByVal sStart As Date, ByVal toHide As Worksheet, Optional ByVal sprintTagOverride As String = "")
     On Error GoTo Fail
     Dim phase As String
     Dim sheetName As String
-    sheetName = FormatSprintTag(sStart) & " Team Availability"
-    Dim ws As Worksheet
-    phase = "AddSheet"
-    Set ws = Worksheets.Add(After:=Worksheets(Worksheets.Count))
-    ws.Name = NextUniqueName(sheetName)
-
+    ' Guard: require at least one roster member before creating a sheet
+    phase = "ValidateRoster"
     Dim members As Variant, roles As Variant, contrib As Variant
-    phase = "ReadRoster"
     members = GetRosterColumn("Member")
     roles = GetRosterColumn("Role")
     contrib = GetRosterColumn("ContributesToVelocity")
     If IsEmpty(members) Then
-        MsgBox "No roster members found in tblRoster.", vbExclamation
+        MsgBox "No roster members found in Config!tblRoster. Add at least one member, then try again.", vbExclamation
         Exit Sub
     End If
+    If Len(Trim$(sprintTagOverride)) > 0 Then
+        sheetName = Trim$(sprintTagOverride) & " Team Availability"
+    Else
+        sheetName = FormatSprintTag(sStart) & " Team Availability"
+    End If
+    Dim ws As Worksheet
+    phase = "AddSheet"
+    Set ws = Worksheets.Add(After:=Worksheets(Worksheets.Count))
+    ws.Name = NextUniqueName(sheetName)
 
     ' Build ordered index: contributors first, grouped by role
     Dim order() As Long, count As Long, yesCount As Long
@@ -2593,6 +2629,14 @@ Private Function FormatSprintTag(ByVal startDate As Date) As String
     If s < 1 Then s = 1
     If s > 7 Then s = 7
     FormatSprintTag = yr & " Q" & q & " S" & s
+End Function
+
+Private Function FormatSprintTagYQS(ByVal yr As Integer, ByVal q As Integer, ByVal s As Integer) As String
+    If q < 1 Then q = 1
+    If q > 4 Then q = 4
+    If s < 1 Then s = 1
+    If s > 7 Then s = 7
+    FormatSprintTagYQS = CStr(yr) & " Q" & CStr(q) & " S" & CStr(s)
 End Function
 
 ' Build a sprint tag string from a date using a pattern stored in name 'SprintNamePattern'.

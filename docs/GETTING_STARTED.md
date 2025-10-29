@@ -8,6 +8,7 @@ Steps
 - Run `Bootstrap`.
 - Open sheet `Getting_Started` and follow the checklist:
 - Visit the `Dashboard` sheet; use the single "Create/Advance Availability" button to create the availability grid for the selected sprint.
+  - First run prompts: you'll enter a sprint start date (MM/DD/YYYY), then confirm the Sprint tag (a default is suggested). If you cancel the date, you'll be asked for Year/Quarter/Sprint instead. The tag is never assumed from the date, so you can label it as needed (e.g., S4).
 - Fill `Config_Teams` → `tblRoster` with your team. Columns:
   - `Member` (person’s name)
   - `Role` (dropdown: QA, Developer, Analyst, Squad Leader, Project Manager)
