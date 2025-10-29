@@ -3355,7 +3355,7 @@ Private Sub EnsureSampleIssuesSheet()
     End If
     ws.Cells.Clear
     Dim headers As Variant
-    headers = Array("Summary","Issue key","Issue id","Issue Type","Status","Created","Resolved","Fix Version/s","Custom field (Epic Link)","Custom field (Story Points)")
+    headers = Array("Summary","Issue key","Issue id","Issue Type","Status","Created date","Resolved date","Fix Version/s","Custom field (Epic Link)","Custom field (Story Points)")
     Dim i As Long
     For i = LBound(headers) To UBound(headers)
         ws.Cells(1, i + 1).Value = headers(i)
@@ -3434,7 +3434,7 @@ Private Sub EnsureRawSampleSheet()
     ws.Cells.Clear
     Dim hdrStr As String
     hdrStr = "Summary|Issue key|Issue id|Issue Type|Status|Priority|Assignee|Reporter|" & _
-             "Created|Start Progress|Resolved|Fix Version/s|Affects Version/s|Component/s|Labels|" & _
+             "Created date|Start Progress|Resolved date|Fix Version/s|Affects Version/s|Component/s|Labels|" & _
              "Custom field (Epic Link)|Custom field (Story Points)|Custom field (Target Date)|URL|Extra1|Extra2"
     Dim headers As Variant: headers = Split(hdrStr, "|")
     Dim i As Long
@@ -3527,7 +3527,7 @@ Private Sub EnsureRawDataSheet()
     ws.Cells.Clear
     Dim hdr As String
     hdr = "Summary|Issue key|Issue id|Issue Type|Status|Priority|Assignee|Reporter|" & _
-          "Created|Start Progress|Updated|Resolved|" & _
+          "Created date|Start Progress|Updated date|Resolved date|" & _
           "Time In Todo|Time In Progress|Time In Testing|Time In Review|" & _
           "Fix Version/s|Component/s|Labels|" & _
           "Custom field (Epic Link)|Custom field (Story Points)|URL"
