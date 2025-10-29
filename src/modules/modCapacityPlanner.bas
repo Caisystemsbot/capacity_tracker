@@ -1,4 +1,5 @@
 Option Explicit
+Option Private Module
 
 ' Compile-time feature flags
 #Const FLOW_OVERLAY_SHAPES = 0 ' Set to 1 to draw WIP backdrop/labels as shapes
