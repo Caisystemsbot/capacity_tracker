@@ -1,9 +1,15 @@
 Option Explicit
 
+' Compile-time feature flags
+#Const FLOW_OVERLAY_SHAPES = 0 ' Set to 1 to draw WIP backdrop/labels as shapes
+
 ' Excel constants (avoid references)
 Private Const xlSrcRange As Long = 1
 Private Const xlYes As Long = 1
 Private Const msoFileDialogFilePicker As Long = 3
+Private Const msoShapeRectangle As Long = 1
+Private Const msoTextOrientationHorizontal As Long = 1
+Private Const msoSendToBack As Long = 1
 Private Const xlValidateList As Long = 3
 Private Const xlValidAlertStop As Long = 1
 Private Const xlBetween As Long = 1
@@ -17,6 +23,17 @@ Private Const xlCount As Long = -4112
 Private Const xlColumnClustered As Long = 51
 Private Const xlAreaStacked As Long = 76
 Private Const xlXYScatter As Long = -4169
+Private Const xlMarkerStyleNone As Long = -4142
+Private Const xlMarkerStyleCircle As Long = 8
+Private Const xlColumnStacked As Long = 52
+Private Const xlBarStacked As Long = 58
+Private Const xlSecondary As Long = 2
+Private Const msoLineDash As Long = 4
+Private Const xlLine As Long = 4
+Private Const xlLineMarkers As Long = 65
+Private Const MOD_SIGNATURE As String = "modCapacityPlanner/Flow v2025-10-28.1908 series-guides"
+
+' Sprint tag coloring and span chart additions (2025-10-29)
 
 Public Sub Bootstrap()
     On Error GoTo Fail
@@ -111,10 +128,10 @@ Public Sub WIP_ImportCSV()
         created = ToDateSafe(WIP_Get(parts, idx, "Created"))
         resolved = ToDateSafe(WIP_Get(parts, idx, "Resolved"))
         Dim tTodo As Double, tProg As Double, tTest As Double, tRev As Double
-        tTodo = CDbl(Val(WIP_Get(parts, idx, "TimeInTodo")))
-        tProg = CDbl(Val(WIP_Get(parts, idx, "TimeInProgress")))
-        tTest = CDbl(Val(WIP_Get(parts, idx, "TimeInTesting")))
-        tRev = CDbl(Val(WIP_Get(parts, idx, "TimeInReview")))
+        tTodo = ParseDurationDays(WIP_Get(parts, idx, "TimeInTodo"))
+        tProg = ParseDurationDays(WIP_Get(parts, idx, "TimeInProgress"))
+        tTest = ParseDurationDays(WIP_Get(parts, idx, "TimeInTesting"))
+        tRev = ParseDurationDays(WIP_Get(parts, idx, "TimeInReview"))
         Dim total As Double: total = 0#
         If tTodo > 0 Then total = total + tTodo
         If tProg > 0 Then total = total + tProg
@@ -311,6 +328,9 @@ End Sub
 Public Sub Flow_BuildCharts(Optional ByVal loSelected As ListObject)
     On Error GoTo Fail
     LogStart "Flow_BuildCharts"
+    On Error Resume Next
+    LogDbg "Flow_Mod", "sig=" & MOD_SIGNATURE & "; ExcelVer=" & Application.Version
+    On Error GoTo Fail
 
     Dim lo As ListObject
     If loSelected Is Nothing Then
@@ -328,37 +348,96 @@ Public Sub Flow_BuildCharts(Optional ByVal loSelected As ListObject)
 
     Dim ws As Worksheet
     Set ws = EnsureSheet("Flow_Metrics")
+    ClearChartsOnSheet ws
     ws.Cells.Clear
     ws.Range("A1").Value = "Flow Metrics"
     ws.Range("A1").Font.Bold = True
 
     Dim nextTop As Long: nextTop = 3
 
-    ' (Removed) Cumulative Flow Diagram table (To Do / In Progress / Done)
-    ' Proceed with Throughput and Cycle Time charts only
+    ' Build WIP Aging first, so its data is visible up front
+    Dim hasTIS As Boolean, hasUn As Boolean
+    Dim idxTodo As Long, idxProg As Long, idxTest As Long, idxRev As Long
+    idxTodo = Flow_GetColIndex(lo, "TimeInTodo")
+    idxProg = Flow_GetColIndex(lo, "TimeInProgress")
+    idxTest = Flow_GetColIndex(lo, "TimeInTesting")
+    idxRev = Flow_GetColIndex(lo, "TimeInReview")
+    hasTIS = (idxTodo + idxProg + idxTest + idxRev) > 0
+    hasUn = Flow_HasUnresolved(lo)
+    On Error Resume Next
+    LogDbg "Flow_WIP_Check", "hasTIS=" & CStr(hasTIS) & "; hasUnresolved=" & CStr(hasUn) & _
+        "; idxTodo=" & idxTodo & "; idxProg=" & idxProg & "; idxTest=" & idxTest & "; idxRev=" & idxRev & _
+        "; srcSheet=" & lo.Parent.Name & "; srcTable=" & lo.Name
+    On Error GoTo 0
 
-    ' 1) Throughput Run Chart (completed per day)
+    nextTop = Flow_NextFreeTop(ws)
+    ws.Cells(nextTop, 1).Value = "WIP Aging"
+    ws.Cells(nextTop, 1).Font.Bold = True
+    If Not hasTIS Then
+        ws.Cells(nextTop + 1, 1).Value = "(No time-in-status columns found: expected Time In Todo/Progress/Testing/Review. Falling back to derive from Created/Start Progress/Resolved if available.)"
+        On Error Resume Next: LogDbg "Flow_WIP_Mode", "derive_from_dates": On Error GoTo 0
+        ' Attempt a derived build if dates exist
+        nextTop = Flow_NextFreeTop(ws)
+        Flow_WriteWIPAging_Data lo, ws, nextTop, True, True ' include resolved, allow date-derived durations
+        Flow_MakeWIPAging_Chart ws, nextTop
+    ElseIf Not hasUn Then
+        ws.Cells(nextTop + 1, 1).Value = "(No unresolved items; showing historical aging at resolution)"
+        On Error Resume Next: LogDbg "Flow_WIP_Mode", "historical_at_resolution": On Error GoTo 0
+        nextTop = Flow_NextFreeTop(ws)
+        Flow_WriteWIPAging_Data lo, ws, nextTop, True, True ' include resolved rows
+        Flow_MakeWIPAging_Chart ws, nextTop
+    Else
+        ' Build the chart from unresolved items
+        On Error Resume Next: LogDbg "Flow_WIP_Mode", "active_wip": On Error GoTo 0
+        nextTop = Flow_NextFreeTop(ws)
+        Flow_WriteWIPAging_Data lo, ws, nextTop, False, True
+        Flow_MakeWIPAging_Chart ws, nextTop
+    End If
+
+    nextTop = Flow_NextFreeTop(ws)
+
+    ' (Removed) Cumulative Flow Diagram table (To Do / In Progress / Done)
+    ' Add Sprint Span bars (items crossing >1 sprint)
+    Dim builtSpan As Boolean
+    builtSpan = Flow_WriteSprintSpan_Data(lo, ws, nextTop)
+    If builtSpan Then
+        Flow_MakeSprintSpan_Chart ws, nextTop
+        nextTop = Flow_NextFreeTop(ws)
+    End If
+
+    ' Proceed with Throughput and Cycle Time charts after WIP Aging
+
+    ' Throughput Run Chart (completed per day)
     Flow_WriteThroughput_Data lo, ws, nextTop
     Flow_MakeThroughput_Chart ws, nextTop
     nextTop = Flow_NextFreeTop(ws)
 
-    ' 2) Cycle Time Scatter (completed vs days)
+    ' Cycle Time Scatter (completed vs days)
     Flow_WriteCycleScatter_Data lo, ws, nextTop
     Flow_MakeCycleScatter_Chart ws, nextTop
-    
-    ' 3) WIP Aging (if time-in-status columns exist and there are unresolved items)
-    If Flow_HasColumn(lo, "TimeInTodo") Or Flow_HasColumn(lo, "TimeInProgress") Or _
-       Flow_HasColumn(lo, "TimeInTesting") Or Flow_HasColumn(lo, "TimeInReview") Then
-        If Flow_HasUnresolved(lo) Then
-            nextTop = Flow_NextFreeTop(ws)
-            Flow_WriteWIPAging_Data lo, ws, nextTop
-            Flow_MakeWIPAging_Chart ws, nextTop
-        End If
-    End If
 
     ws.Columns("A:Z").AutoFit
     LogOk "Flow_BuildCharts"
-    If IsVerbose() Then MsgBox "Flow metrics charts created on 'Flow_Metrics'.", vbInformation
+    If IsVerbose() Then
+        Dim cA As Boolean, cT As Boolean, cC As Boolean, cS As Boolean
+        Dim co As ChartObject
+        For Each co In ws.ChartObjects
+            On Error Resume Next
+            Dim ttl As String: ttl = co.Chart.ChartTitle.Text
+            On Error GoTo 0
+            If InStr(1, ttl, "Aging Work in Progress", vbTextCompare) > 0 Then cA = True
+            If InStr(1, ttl, "Throughput Run Chart", vbTextCompare) > 0 Then cT = True
+            If InStr(1, ttl, "Cycle Time Scatter", vbTextCompare) > 0 Then cC = True
+            If InStr(1, ttl, "Sprint Spans", vbTextCompare) > 0 Then cS = True
+        Next co
+        Dim msg As String
+        msg = "Flow_Metrics build complete:" & vbCrLf & _
+              "- WIP Aging: " & IIf(cA, "OK", "Skipped") & vbCrLf & _
+              "- Throughput: " & IIf(cT, "OK", "Skipped") & vbCrLf & _
+              "- Cycle Scatter: " & IIf(cC, "OK", "Skipped") & vbCrLf & _
+              "- Sprint Spans: " & IIf(cS, "OK", "Skipped")
+        MsgBox msg, vbInformation
+    End If
     Exit Sub
 Fail:
     LogErr "Flow_BuildCharts", "Err " & Err.Number & ": " & Err.Description
@@ -367,22 +446,35 @@ End Sub
 
 Private Function Flow_FindFactsTable() As ListObject
     ' Prefer a non-empty Jira_Facts!tblJiraFacts; else first table with Created and Resolved/CycleCalDays with rows
+    Dim ws As Worksheet
+    Dim lo As ListObject
+
     On Error Resume Next
-    Dim ws As Worksheet, lo As ListObject
-    Set ws = Worksheets("Jira_Facts"): If Not ws Is Nothing Then Set lo = ws.ListObjects("tblJiraFacts")
+    Set ws = Worksheets("Jira_Facts")
     On Error GoTo 0
-    If Not lo Is Nothing Then
+    If Not ws Is Nothing Then
         On Error Resume Next
-        If Not lo.DataBodyRange Is Nothing Then If lo.ListRows.Count > 0 Then Set Flow_FindFactsTable = lo: Exit Function
+        Set lo = ws.ListObjects("tblJiraFacts")
         On Error GoTo 0
+        If Not lo Is Nothing Then
+            If Not lo.DataBodyRange Is Nothing Then
+                If lo.ListRows.Count > 0 Then
+                    Set Flow_FindFactsTable = lo
+                    Exit Function
+                End If
+            End If
+        End If
     End If
 
     For Each ws In ThisWorkbook.Worksheets
         For Each lo In ws.ListObjects
-            If Flow_HasColumn(lo, "Created") And (Flow_HasColumn(lo, "Resolved") Or Flow_HasColumn(lo, "CycleCalDays")) Then
-                If Not lo.DataBodyRange Is Nothing Then If lo.ListRows.Count > 0 Then
-                    Set Flow_FindFactsTable = lo
-                    Exit Function
+            If Flow_HasColumn(lo, "Created") And _
+               (Flow_HasColumn(lo, "Resolved") Or Flow_HasColumn(lo, "CycleCalDays")) Then
+                If Not lo.DataBodyRange Is Nothing Then
+                    If lo.ListRows.Count > 0 Then
+                        Set Flow_FindFactsTable = lo
+                        Exit Function
+                    End If
                 End If
             End If
         Next lo
@@ -403,13 +495,13 @@ Private Function Flow_GetColIndex(ByVal lo As ListObject, ByVal key As String) A
         Case "startprogress"
             names = Array("startprogress", "start progress", "started", "in progress date")
         Case "timeintodo"
-            names = Array("time in todo", "time in to do", "in todo", "todo days")
+            names = Array("time in todo", "time in to do", "in todo", "todo days", "timeintodo")
         Case "timeinprogress"
-            names = Array("time in progress", "in progress", "in progress days")
+            names = Array("time in progress", "in progress", "in progress days", "timeinprogress")
         Case "timeintesting"
-            names = Array("time in testing", "in testing", "testing days")
+            names = Array("time in testing", "in testing", "testing days", "timeintesting")
         Case "timeinreview"
-            names = Array("time in review", "in review", "review days")
+            names = Array("time in review", "in review", "review days", "timeinreview")
         Case Else
             names = Array(key)
     End Select
@@ -523,18 +615,20 @@ Private Sub Flow_MakeCFD_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
 End Sub
 
 Private Sub Flow_WriteThroughput_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long)
-    ' Completed items per day based on Resolved
+    ' Weekly Throughput run chart source (Week-of-Sunday), plus 4-week rolling average
     Dim idxR As Long
     idxR = Flow_GetColIndex(lo, "Resolved")
     If idxR = 0 Then Exit Sub
 
     Dim counts As Object: Set counts = CreateObject("Scripting.Dictionary")
-    Dim i As Long, r As Variant, d As Date, key As String
+    Dim i As Long, rv As Variant, d As Date, wk As Date, key As String
     For i = 1 To lo.ListRows.Count
-        r = lo.DataBodyRange.Cells(i, idxR).Value
-        If IsDate(r) Then
-            d = DateSerial(Year(r), Month(r), Day(r))
-            key = CStr(d)
+        rv = lo.DataBodyRange.Cells(i, idxR).Value
+        If IsDate(rv) Then
+            d = DateSerial(Year(rv), Month(rv), Day(rv))
+            ' Week-of-Sunday
+            wk = DateAdd("d", - (Weekday(d, vbSunday) - 1), d)
+            key = CStr(wk)
             If Not counts.Exists(key) Then counts(key) = 0
             counts(key) = counts(key) + 1
         End If
@@ -552,14 +646,27 @@ Private Sub Flow_WriteThroughput_Data(ByVal lo As ListObject, ByVal ws As Worksh
         Next k
     Next j
 
-    ws.Cells(topRow, 1).Value = "Throughput"
+    ws.Cells(topRow, 1).Value = "Throughput Run Chart"
     ws.Cells(topRow, 1).Font.Bold = True
-    ws.Cells(topRow + 1, 1).Resize(1, 2).Value = Array("Date", "Completed")
-    ws.Cells(topRow + 1, 1).Resize(1, 2).Font.Bold = True
+    ws.Cells(topRow + 1, 1).Resize(1, 3).Value = Array("WeekOf", "Completed", "Avg4Wk")
+    ws.Cells(topRow + 1, 1).Resize(1, 3).Font.Bold = True
+
     Dim row As Long: row = topRow + 2
+    Dim hist(1 To 1024) As Double, n As Long
     For j = LBound(keys) To UBound(keys)
-        ws.Cells(row, 1).Value = CDate(keys(j))
-        ws.Cells(row, 2).Value = counts(keys(j))
+        Dim wkDate As Date: wkDate = CDate(keys(j))
+        Dim cnt As Double: cnt = CDbl(counts(keys(j)))
+        ws.Cells(row, 1).Value = "Week of " & Format$(wkDate, "yyyymmdd")
+        ws.Cells(row, 2).Value = cnt
+        ' rolling 4-week average (including this week)
+        n = n + 1: If n > UBound(hist) Then n = UBound(hist)
+        hist(n) = cnt
+        Dim s As Double: s = 0#: Dim c As Long: c = 0
+        Dim back As Long
+        For back = 0 To 3
+            If n - back >= 1 Then s = s + hist(n - back): c = c + 1
+        Next back
+        If c > 0 Then ws.Cells(row, 3).Value = s / c
         row = row + 1
     Next j
 End Sub
@@ -569,19 +676,53 @@ Private Sub Flow_MakeThroughput_Chart(ByVal ws As Worksheet, ByVal topRow As Lon
     Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
     If lastRow <= hdr.Row + 1 Then Exit Sub
     Dim ch As ChartObject
-    Set ch = ws.ChartObjects.Add(Left:=380, Top:=ws.Cells(topRow + 1, 1).Top, Width:=540, Height:=240)
-    ch.Chart.ChartType = xlColumnClustered
-    ch.Chart.SetSourceData ws.Range(ws.Cells(hdr.Row, hdr.Column), ws.Cells(lastRow, hdr.Column + 1))
+    Set ch = ws.ChartObjects.Add(Left:=380, Top:=ws.Cells(topRow + 1, 1).Top, Width:=540, Height:=260)
     ch.Chart.HasTitle = True
-    ch.Chart.ChartTitle.Text = "Throughput (Completed per Day)"
+    ch.Chart.ChartTitle.Text = "Throughput Run Chart"
+
+    ' Completed series (line with markers)
+    With ch.Chart.SeriesCollection.NewSeries
+        .XValues = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+        .Values = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + 1), ws.Cells(lastRow, hdr.Column + 1))
+        .Name = "Weekly Completed"
+        .ChartType = xlLineMarkers
+        On Error Resume Next
+        .Format.Line.ForeColor.RGB = RGB(99, 99, 99)
+        .MarkerStyle = xlMarkerStyleCircle
+        .MarkerSize = 6
+        .MarkerForegroundColor = RGB(45, 98, 163)
+        .MarkerBackgroundColor = RGB(45, 98, 163)
+        On Error GoTo 0
+    End With
+
+    ' 4-week rolling average (dashed green)
+    With ch.Chart.SeriesCollection.NewSeries
+        .XValues = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+        .Values = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + 2), ws.Cells(lastRow, hdr.Column + 2))
+        .Name = "4w Avg"
+        .ChartType = xlLine
+        On Error Resume Next
+        .Format.Line.ForeColor.RGB = RGB(0, 176, 80)
+        .Format.Line.DashStyle = msoLineDash
+        On Error GoTo 0
+    End With
+
+    ' Gridlines on Y only
+    On Error Resume Next
+    ch.Chart.Axes(2).HasMajorGridlines = True
+    ch.Chart.Axes(1).HasMajorGridlines = False
+    On Error GoTo 0
 End Sub
 
 Private Sub Flow_WriteCycleScatter_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long)
     ' Completed date vs cycle time (calendar days preferred), fallback to Resolved-Created
-    Dim idxR As Long, idxC As Long, idxCal As Long
+    ' If a column named 'SprintTag' exists in the facts, a third column will be written
+    ' to enable per-sprint coloring in the chart builder.
+    Dim idxR As Long, idxC As Long, idxCal As Long, idxSprint As Long
     idxR = Flow_GetColIndex(lo, "Resolved")
     idxC = Flow_GetColIndex(lo, "Created")
     On Error Resume Next: idxCal = lo.ListColumns("CycleCalDays").Index: On Error GoTo 0
+    On Error Resume Next: idxSprint = lo.ListColumns("SprintTag").Index: On Error GoTo 0
     If idxR = 0 Or idxC = 0 Then Exit Sub
     On Error Resume Next
     LogDbg "Flow_Scatter_Idx", "Sheet=" & lo.Parent.Name & "; Table=" & lo.Name & _
@@ -590,8 +731,13 @@ Private Sub Flow_WriteCycleScatter_Data(ByVal lo As ListObject, ByVal ws As Work
 
     ws.Cells(topRow, 1).Value = "Cycle Time Scatter"
     ws.Cells(topRow, 1).Font.Bold = True
-    ws.Cells(topRow + 1, 1).Resize(1, 2).Value = Array("ResolvedDate", "Days")
-    ws.Cells(topRow + 1, 1).Resize(1, 2).Font.Bold = True
+    If idxSprint > 0 Then
+        ws.Cells(topRow + 1, 1).Resize(1, 3).Value = Array("ResolvedDate", "Days", "SprintTag")
+        ws.Cells(topRow + 1, 1).Resize(1, 3).Font.Bold = True
+    Else
+        ws.Cells(topRow + 1, 1).Resize(1, 2).Value = Array("ResolvedDate", "Days")
+        ws.Cells(topRow + 1, 1).Resize(1, 2).Font.Bold = True
+    End If
 
     Dim row As Long: row = topRow + 2
     Dim i As Long, r As Variant, c As Variant, d As Double
@@ -608,6 +754,9 @@ Private Sub Flow_WriteCycleScatter_Data(ByVal lo As ListObject, ByVal ws As Work
             If d >= 0 Then
                 ws.Cells(row, 1).Value = CDate(r)
                 ws.Cells(row, 2).Value = d
+                If idxSprint > 0 Then
+                    ws.Cells(row, 3).Value = CStr(lo.DataBodyRange.Cells(i, idxSprint).Value)
+                End If
                 row = row + 1
             End If
         End If
@@ -618,19 +767,292 @@ Private Sub Flow_MakeCycleScatter_Chart(ByVal ws As Worksheet, ByVal topRow As L
     Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
     Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
     If lastRow <= hdr.Row + 1 Then Exit Sub
-    Dim rngX As Range, rngY As Range
-    Set rngX = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
-    Set rngY = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + 1), ws.Cells(lastRow, hdr.Column + 1))
+
+    Dim r As Long
+    Dim yv As Double
+    Dim minX As Double, maxX As Double, maxY As Double
+    minX = 9.99E+307: maxX = -9.99E+307: maxY = 0
+
+    ' Collect Y values to compute percentiles and detect color-by-sprint
+    Dim n As Long: n = 0
+    Dim vals() As Double
+    ' Detect if column C has SprintTag header
+    Dim hasSprintTag As Boolean
+    hasSprintTag = (LCase$(CStr(ws.Cells(hdr.Row, hdr.Column + 2).Value)) = LCase$("SprintTag"))
+
+    ' Build dictionaries if sprint tag exists
+    Dim groups As Object, lastDateByTag As Object
+    If hasSprintTag Then
+        Set groups = CreateObject("Scripting.Dictionary")
+        Set lastDateByTag = CreateObject("Scripting.Dictionary")
+    End If
+
+    For r = hdr.Row + 1 To lastRow
+        Dim y As Double: y = Val(ws.Cells(r, hdr.Column + 1).Value)
+        If y > 0 Then
+            n = n + 1
+            ReDim Preserve vals(1 To n)
+            vals(n) = y
+        End If
+        Dim x As Variant: x = ws.Cells(r, hdr.Column).Value
+        If IsDate(x) Then
+            If CDbl(x) < minX Then minX = CDbl(x)
+            If CDbl(x) > maxX Then maxX = CDbl(x)
+        End If
+        If y > 0 Then If y > maxY Then maxY = y
+        If hasSprintTag Then
+            Dim tag As String: tag = CStr(ws.Cells(r, hdr.Column + 2).Value)
+            If Len(tag) > 0 And IsDate(x) And y > 0 Then
+                If Not groups.Exists(tag) Then
+                    groups(tag) = Array(0) ' we'll write later; keep as placeholder
+                End If
+                If Not lastDateByTag.Exists(tag) Then lastDateByTag(tag) = CDate(x)
+                If CDate(x) > CDate(lastDateByTag(tag)) Then lastDateByTag(tag) = CDate(x)
+            End If
+        End If
+    Next r
+    If n = 0 Then Exit Sub
+    Dim p50 As Double, p70 As Double, p85 As Double, p95 As Double
+    p50 = Flow_Quantile(vals, n, 0.5)
+    p70 = Flow_Quantile(vals, n, 0.7)
+    p85 = Flow_Quantile(vals, n, 0.85)
+    p95 = Flow_Quantile(vals, n, 0.95)
+
     Dim ch As ChartObject
-    Set ch = ws.ChartObjects.Add(Left:=20, Top:=ws.Cells(topRow + 1, 1).Top, Width:=340, Height:=260)
+    Set ch = ws.ChartObjects.Add(Left:=20, Top:=ws.Cells(topRow + 1, 1).Top, Width:=680, Height:=360)
     ch.Chart.ChartType = xlXYScatter
-    With ch.Chart.SeriesCollection.NewSeries
-        .XValues = rngX
-        .Values = rngY
-        .Name = "=Cycle Time"
+
+    If hasSprintTag And groups.Count > 0 Then
+        ' Build per-sprint helper blocks across columns: C:D, E:F, ...
+        ' Sort sprint tags by latest resolved date descending so newest appears first
+        Dim keys() As Variant: keys = groups.Keys
+        Dim ii As Long, jj As Long
+        For ii = LBound(keys) To UBound(keys) - 1
+            For jj = ii + 1 To UBound(keys)
+                If CDate(lastDateByTag(keys(jj))) > CDate(lastDateByTag(keys(ii))) Then
+                    Dim tmp As Variant: tmp = keys(ii): keys(ii) = keys(jj): keys(jj) = tmp
+                End If
+            Next jj
+        Next ii
+
+        Dim baseCol As Long: baseCol = hdr.Column + 2 ' start at C
+        Dim writeRow As Long
+        For ii = LBound(keys) To UBound(keys)
+            ' NOTE: cannot redeclare a variable name already used earlier in this procedure.
+            ' Use a distinct name (tagKey) to avoid "Duplicate declaration" compile error.
+            Dim tagKey As String: tagKey = CStr(keys(ii))
+            writeRow = lastRow + 2
+            For r = hdr.Row + 1 To lastRow
+                Dim xv As Variant: xv = ws.Cells(r, hdr.Column).Value
+                Dim yv2 As Double: yv2 = Val(ws.Cells(r, hdr.Column + 1).Value)
+                If IsDate(xv) And yv2 > 0 Then
+                    If CStr(ws.Cells(r, hdr.Column + 2).Value) = tagKey Then
+                        ws.Cells(writeRow, baseCol + (ii - LBound(keys)) * 2 + 0).Value = xv
+                        ws.Cells(writeRow, baseCol + (ii - LBound(keys)) * 2 + 1).Value = yv2
+                        writeRow = writeRow + 1
+                    End If
+                End If
+            Next r
+            If writeRow > lastRow + 2 Then
+                With ch.Chart.SeriesCollection.NewSeries
+                    .XValues = ws.Range(ws.Cells(lastRow + 2, baseCol + (ii - LBound(keys)) * 2 + 0), _
+                                        ws.Cells(writeRow - 1, baseCol + (ii - LBound(keys)) * 2 + 0))
+                    .Values = ws.Range(ws.Cells(lastRow + 2, baseCol + (ii - LBound(keys)) * 2 + 1), _
+                                        ws.Cells(writeRow - 1, baseCol + (ii - LBound(keys)) * 2 + 1))
+                    .Name = tagKey
+                    On Error Resume Next
+                    .MarkerStyle = xlMarkerStyleCircle
+                    .MarkerSize = 6
+                    .Format.Line.Visible = 0
+                    ' Apply a simple rotating color palette
+                    Dim ci As Long: ci = (ii - LBound(keys)) Mod 10
+                    Dim rC As Long, gC As Long, bC As Long
+                    Select Case ci
+                        Case 0: rC = 45: gC = 98: bC = 163
+                        Case 1: rC = 192: gC = 0: bC = 0
+                        Case 2: rC = 0: gC = 176: bC = 80
+                        Case 3: rC = 112: gC = 48: bC = 160
+                        Case 4: rC = 255: gC = 192: bC = 0
+                        Case 5: rC = 91: gC = 155: bC = 213
+                        Case 6: rC = 237: gC = 125: bC = 49
+                        Case 7: rC = 165: gC = 165: bC = 165
+                        Case 8: rC = 0: gC = 112: bC = 192
+                        Case Else: rC = 146: gC = 208: bC = 80
+                    End Select
+                    .MarkerForegroundColor = RGB(rC, gC, bC)
+                    .MarkerBackgroundColor = RGB(rC, gC, bC)
+                    On Error GoTo 0
+                End With
+            End If
+        Next ii
+    Else
+        ' Fallback to two-series P85 split coloring
+        Dim dstBlue As Long, dstRed As Long
+        dstBlue = lastRow + 2
+        dstRed = lastRow + 2
+        For r = hdr.Row + 1 To lastRow
+            Dim x2 As Variant: x2 = ws.Cells(r, hdr.Column).Value
+            Dim y2 As Double: y2 = Val(ws.Cells(r, hdr.Column + 1).Value)
+            If IsDate(x2) And y2 > 0 Then
+                If y2 <= p85 Then
+                    ws.Cells(dstBlue, hdr.Column + 2).Value = x2 ' col C
+                    ws.Cells(dstBlue, hdr.Column + 3).Value = y2 ' col D
+                    dstBlue = dstBlue + 1
+                Else
+                    ws.Cells(dstRed, hdr.Column + 4).Value = x2 ' col E
+                    ws.Cells(dstRed, hdr.Column + 5).Value = y2 ' col F
+                    dstRed = dstRed + 1
+                End If
+            End If
+        Next r
+        If dstBlue > lastRow + 2 Then
+            With ch.Chart.SeriesCollection.NewSeries
+                .XValues = ws.Range(ws.Cells(lastRow + 2, hdr.Column + 2), ws.Cells(dstBlue - 1, hdr.Column + 2))
+                .Values = ws.Range(ws.Cells(lastRow + 2, hdr.Column + 3), ws.Cells(dstBlue - 1, hdr.Column + 3))
+                .Name = "<=P85"
+                On Error Resume Next
+                .MarkerStyle = xlMarkerStyleCircle
+                .MarkerSize = 6
+                .Format.Line.Visible = 0
+                .MarkerForegroundColor = RGB(45, 98, 163)
+                .MarkerBackgroundColor = RGB(45, 98, 163)
+                On Error GoTo 0
+            End With
+        End If
+        If dstRed > lastRow + 2 Then
+            With ch.Chart.SeriesCollection.NewSeries
+                .XValues = ws.Range(ws.Cells(lastRow + 2, hdr.Column + 4), ws.Cells(dstRed - 1, hdr.Column + 4))
+                .Values = ws.Range(ws.Cells(lastRow + 2, hdr.Column + 5), ws.Cells(dstRed - 1, hdr.Column + 5))
+                .Name = ">P85"
+                On Error Resume Next
+                .MarkerStyle = xlMarkerStyleCircle
+                .MarkerSize = 6
+                .Format.Line.Visible = 0
+                .MarkerForegroundColor = RGB(192, 0, 0)
+                .MarkerBackgroundColor = RGB(192, 0, 0)
+                On Error GoTo 0
+            End With
+        End If
+    End If
+
+    ' Axes formatting
+    Dim yMaxScale As Double: yMaxScale = Flow_NiceCeiling(Application.WorksheetFunction.Max(maxY, p95), 1)
+    If yMaxScale < 3 Then yMaxScale = 3
+    With ch.Chart.Axes(1)
+        .MinimumScale = minX
+        .MaximumScale = maxX
     End With
+    With ch.Chart.Axes(2)
+        .MinimumScale = 0
+        .MaximumScale = yMaxScale
+        .HasMajorGridlines = True
+        .MajorUnit = Flow_NiceMajorUnit(yMaxScale)
+    End With
+
+    ' Percentile guide lines (dashed)
+    Call Flow_AddPercentileLine_Primary(ch, minX, maxX, p50, "50%", RGB(128, 128, 128))
+    Call Flow_AddPercentileLine_Primary(ch, minX, maxX, p70, "70%", RGB(191, 144, 0))
+    Call Flow_AddPercentileLine_Primary(ch, minX, maxX, p85, "85%", RGB(192, 0, 0))
+    Call Flow_AddPercentileLine_Primary(ch, minX, maxX, p95, "95%", RGB(128, 0, 0))
+    ' Label the right end of each percentile line
+    Flow_LabelPercentileLine_Primary ch, "50%"
+    Flow_LabelPercentileLine_Primary ch, "70%"
+    Flow_LabelPercentileLine_Primary ch, "85%"
+    Flow_LabelPercentileLine_Primary ch, "95%"
+
     ch.Chart.HasTitle = True
     ch.Chart.ChartTitle.Text = "Cycle Time Scatter"
+
+    ' Write a compact Summary Statistics block to the right of the chart
+    On Error Resume Next
+    Dim sumCol As Long: sumCol = hdr.Column + 6 ' place around column G
+    Dim rSum As Long: rSum = topRow
+    ws.Cells(rSum, sumCol).Value = "Summary Statistics"
+    ws.Cells(rSum, sumCol).Font.Bold = True
+    rSum = rSum + 1
+    Dim daysSpan As Long: daysSpan = 0
+    If minX < 9.99E+307 And maxX > -9.99E+307 Then daysSpan = DateDiff("d", CDate(minX), CDate(maxX))
+    ws.Cells(rSum, sumCol).Value = CStr(Format$(CDate(minX), "yyyymmdd")) & " - " & CStr(Format$(CDate(maxX), "yyyymmdd")) & _
+        " (" & daysSpan & " days)"
+    rSum = rSum + 1
+    ws.Cells(rSum, sumCol).Resize(1, 6).Value = Array("Percentile Range", "0-50%", "50-70%", "70-85%", "85-95%", "95-100%")
+    ws.Cells(rSum, sumCol).Resize(1, 6).Font.Bold = True
+    rSum = rSum + 1
+    ws.Cells(rSum, sumCol).Value = "Work Item Count"
+    Dim c1 As Long, c2 As Long, c3 As Long, c4 As Long, c5 As Long, nTot As Long
+    Dim rr As Long
+    For rr = hdr.Row + 1 To lastRow
+        yv = Val(ws.Cells(rr, hdr.Column + 1).Value)
+        If yv > 0 Then
+            nTot = nTot + 1
+            If yv <= p50 Then
+                c1 = c1 + 1
+            ElseIf yv <= p70 Then
+                c2 = c2 + 1
+            ElseIf yv <= p85 Then
+                c3 = c3 + 1
+            ElseIf yv <= p95 Then
+                c4 = c4 + 1
+            Else
+                c5 = c5 + 1
+            End If
+        End If
+    Next rr
+    ws.Cells(rSum, sumCol + 1).Resize(1, 5).Value = Array(c1, c2, c3, c4, c5)
+    rSum = rSum + 1
+    ws.Cells(rSum, sumCol).Value = "Work Item Total"
+    ws.Cells(rSum, sumCol + 1).Value = nTot
+    rSum = rSum + 1
+    ws.Cells(rSum, sumCol).Value = "Cycle Time (Days)"
+    ws.Cells(rSum, sumCol + 1).Resize(1, 5).Value = Array(Round(p50, 0), Round(p70, 0), Round(p85, 0), Round(p95, 0), Round(yMaxScale, 0))
+    ws.Range(ws.Cells(topRow, sumCol), ws.Cells(rSum, sumCol + 5)).Borders.Weight = 2
+    ws.Range(ws.Cells(topRow, sumCol), ws.Cells(rSum, sumCol + 5)).Interior.Color = RGB(242, 242, 242)
+    On Error GoTo 0
+End Sub
+
+Private Sub Flow_AddPercentileLine_Primary(ByVal ch As ChartObject, ByVal xMin As Double, ByVal xMax As Double, ByVal yVal As Double, ByVal name As String, ByVal color As Long)
+    If yVal <= 0 Then Exit Sub
+    On Error Resume Next
+    Dim s As Object
+    For Each s In ch.Chart.SeriesCollection
+        If StrComp(s.Name & "", name, vbTextCompare) = 0 Then s.Delete
+    Next s
+    On Error GoTo 0
+    Dim srs As Object
+    Set srs = ch.Chart.SeriesCollection.NewSeries
+    srs.Name = name
+    srs.ChartType = xlXYScatter
+    srs.XValues = Array(xMin, xMax)
+    Dim y(1 To 2) As Double: y(1) = yVal: y(2) = yVal
+    srs.Values = y
+    On Error Resume Next
+    srs.MarkerStyle = xlMarkerStyleNone
+    srs.Format.Line.ForeColor.RGB = color
+    srs.Format.Line.Weight = 1.25
+    srs.Format.Line.DashStyle = msoLineDash
+    On Error GoTo 0
+End Sub
+
+Private Sub Flow_LabelPercentileLine_Primary(ByVal ch As ChartObject, ByVal seriesName As String)
+    On Error Resume Next
+    Dim s As Object
+    For Each s In ch.Chart.SeriesCollection
+        If StrComp(s.Name & "", seriesName, vbTextCompare) = 0 Then
+            ' Place a label on the last point (right edge)
+            Dim pt As Object
+            Set pt = s.Points(2)
+            pt.HasDataLabel = True
+            pt.DataLabel.Text = seriesName
+            pt.DataLabel.Font.Size = 8
+            Exit For
+        End If
+    Next s
+    ' Make Y gridlines dashed for a closer AA look
+    With ch.Chart.Axes(2).MajorGridlines.Format.Line
+        .DashStyle = msoLineDash
+        .ForeColor.RGB = RGB(200, 200, 200)
+    End With
+    On Error GoTo 0
 End Sub
 
 Private Function ColumnsSummary(ByVal lo As ListObject) As String
@@ -644,9 +1066,14 @@ Private Function ColumnsSummary(ByVal lo As ListObject) As String
 End Function
 
 Private Function Flow_NextFreeTop(ByVal ws As Worksheet) As Long
-    ' Find the next free Y position to place another block ~ 16 rows below last used row
-    Dim last As Long
-    last = ws.UsedRange.Row + ws.UsedRange.Rows.Count - 1
+    ' Robustly find the next free row by scanning columns A:Z.
+    ' Avoid UsedRange glitches that can remain large after Clear.
+    Dim last As Long, c As Long, r As Long
+    last = 1
+    For c = 1 To 26 ' A:Z
+        r = ws.Cells(ws.Rows.Count, c).End(xlUp).Row
+        If r > last Then last = r
+    Next c
     If last < 1 Then last = 1
     Flow_NextFreeTop = last + 3
 End Function
@@ -664,49 +1091,143 @@ Private Function Flow_HasUnresolved(ByVal lo As ListObject) As Boolean
     Next i
 End Function
 
-Private Sub Flow_WriteWIPAging_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long)
+Private Sub Flow_WriteWIPAging_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long, Optional ByVal includeResolved As Boolean = False, Optional ByVal writeDebug As Boolean = True)
     Dim idxR As Long, idxTodo As Long, idxProg As Long, idxTest As Long, idxRev As Long
+    Dim idxC As Long, idxStart As Long
     idxR = Flow_GetColIndex(lo, "Resolved")
     idxTodo = Flow_GetColIndex(lo, "TimeInTodo")
     idxProg = Flow_GetColIndex(lo, "TimeInProgress")
     idxTest = Flow_GetColIndex(lo, "TimeInTesting")
     idxRev = Flow_GetColIndex(lo, "TimeInReview")
-    If idxR = 0 Then Exit Sub
-    If (idxTodo + idxProg + idxTest + idxRev) = 0 Then Exit Sub
+    idxC = Flow_GetColIndex(lo, "Created")
+    idxStart = Flow_GetColIndex(lo, "StartProgress")
+    If idxR = 0 And idxC = 0 Then Exit Sub ' need at least Resolved or Created to attempt
+    ' If no explicit time-in-status columns, we will attempt to derive from dates
 
-    ws.Cells(topRow, 1).Value = "WIP Aging"
+    ws.Cells(topRow, 1).Value = "Aging Work in Progress"
     ws.Cells(topRow, 1).Font.Bold = True
 
-    ' We will write separate X/Y blocks per stage to make 4 series
+    ' We will write separate X/Y blocks per stage to make up to 5 series (adds Bugfixes)
     Dim rowStart As Long: rowStart = topRow + 2
-    Dim lanes(1 To 4) As String
-    lanes(1) = "To Do": lanes(2) = "In Progress": lanes(3) = "Testing": lanes(4) = "Review"
+    Dim lanes(1 To 5) As String
+    lanes(1) = "To Do": lanes(2) = "In Progress": lanes(3) = "Testing": lanes(4) = "Review": lanes(5) = "Bugfixes"
 
-    Dim laneRows(1 To 4) As Long, i As Long
-    For i = 1 To 4: laneRows(i) = rowStart: Next i
+    Dim laneRows(1 To 5) As Long, i As Long
+    For i = 1 To 5: laneRows(i) = rowStart: Next i
+
+    ' Optional visible debug table so users can see the source rows
+    Dim dbgCol As Long: dbgCol = 5 ' column E
+    Dim idxKey As Long
+    idxKey = Flow_Col(lo, Array("issue key","key","issuekey"))
+    If writeDebug Then
+        ws.Cells(topRow, dbgCol).Value = "WIP Aging – Data"
+        ws.Cells(topRow, dbgCol).Font.Bold = True
+        ws.Cells(topRow + 1, dbgCol).Resize(1, 5).Value = Array("IssueKey","Stage","AgeDays","Created","Resolved")
+        ws.Cells(topRow + 1, dbgCol).Resize(1, 5).Font.Bold = True
+    End If
+    Dim dbgRow As Long: dbgRow = topRow + 2
 
     Dim r As Long, cTodo As Double, cProg As Double, cTest As Double, cRev As Double, age As Double
+    Dim idxType As Long
+    idxType = Flow_Col(lo, Array("issue type","issuetype","type"))
     For r = 1 To lo.ListRows.Count
-        If Not IsDate(lo.DataBodyRange.Cells(r, idxR).Value) Then
-            cTodo = IIf(idxTodo > 0, Val(lo.DataBodyRange.Cells(r, idxTodo).Value), 0#)
-            cProg = IIf(idxProg > 0, Val(lo.DataBodyRange.Cells(r, idxProg).Value), 0#)
+        Dim isRes As Boolean
+        isRes = False
+        If idxR > 0 Then isRes = IsDate(lo.DataBodyRange.Cells(r, idxR).Value)
+        If (Not isRes) Or includeResolved Then
+            ' Read time-in-status or derive from dates
+            Dim vCreated As Variant, vStart As Variant, vResolved As Variant
+            vCreated = IIf(idxC > 0, lo.DataBodyRange.Cells(r, idxC).Value, Empty)
+            vStart = IIf(idxStart > 0, lo.DataBodyRange.Cells(r, idxStart).Value, Empty)
+            vResolved = IIf(idxR > 0, lo.DataBodyRange.Cells(r, idxR).Value, Empty)
+
+            If idxTodo > 0 Then
+                cTodo = Val(lo.DataBodyRange.Cells(r, idxTodo).Value)
+            ElseIf IsDate(vCreated) And IsDate(vStart) Then
+                cTodo = Application.WorksheetFunction.Max(0, DateDiff("d", CDate(vCreated), CDate(vStart)))
+            Else
+                cTodo = 0#
+            End If
+
+            If idxProg > 0 Then
+                cProg = Val(lo.DataBodyRange.Cells(r, idxProg).Value)
+            ElseIf IsDate(vStart) Then
+                Dim untilDate As Date
+                If IsDate(vResolved) Then
+                    untilDate = CDate(vResolved)
+                Else
+                    untilDate = Date
+                End If
+                cProg = Application.WorksheetFunction.Max(0, DateDiff("d", CDate(vStart), untilDate))
+            Else
+                cProg = 0#
+            End If
+
             cTest = IIf(idxTest > 0, Val(lo.DataBodyRange.Cells(r, idxTest).Value), 0#)
             cRev = IIf(idxRev > 0, Val(lo.DataBodyRange.Cells(r, idxRev).Value), 0#)
-            age = cTodo + cProg + cTest + cRev
+            ' True Work Item Age = Now - Start (exclude To Do)
+            If (idxProg + idxTest + idxRev) > 0 Then
+                age = cProg + cTest + cRev
+            ElseIf IsDate(vStart) Then
+                Dim u2 As Date
+                If IsDate(vResolved) Then u2 = CDate(vResolved) Else u2 = Date
+                age = Application.WorksheetFunction.Max(0, DateDiff("d", CDate(vStart), u2))
+            ElseIf IsDate(vCreated) Then
+                ' Fallback when Start not available: use Created
+                Dim u3 As Date
+                If IsDate(vResolved) Then u3 = CDate(vResolved) Else u3 = Date
+                age = Application.WorksheetFunction.Max(0, DateDiff("d", CDate(vCreated), u3))
+            Else
+                age = 0#
+            End If
 
             Dim stage As Integer: stage = 1
-            If cRev > 0 Then stage = 4 _
-            ElseIf cTest > 0 Then stage = 3 _
-            ElseIf cProg > 0 Then stage = 2 _
-            Else stage = 1
+            Dim isBug As Boolean: isBug = False
+            If idxType > 0 Then
+                Dim tRaw As String: tRaw = LCase$(CStr(lo.DataBodyRange.Cells(r, idxType).Value))
+                If InStr(1, tRaw, "bug", vbTextCompare) > 0 Or InStr(1, tRaw, "defect", vbTextCompare) > 0 Then isBug = True
+            End If
+            If includeResolved And isRes Then
+                ' For historical view, place by dominant stage duration
+                Dim m As Double: m = cTodo: stage = 1
+                If cProg > m Then m = cProg: stage = 2
+                If cTest > m Then m = cTest: stage = 3
+                If cRev > m Then m = cRev: stage = 4
+                If isBug Then stage = 5
+            Else
+                ' For active WIP, place by latest stage with time
+                If isBug Then
+                    stage = 5
+                ElseIf cRev > 0 Then
+                    stage = 4
+                ElseIf cTest > 0 Then
+                    stage = 3
+                ElseIf cProg > 0 Then
+                    stage = 2
+                Else
+                    stage = 1
+                End If
+            End If
 
             ' X lane position with slight jitter based on running count
             Dim pos As Double, offset As Double
             offset = ((laneRows(stage) - rowStart) Mod 7) * 0.03 - 0.09
             pos = stage + offset
             ws.Cells(laneRows(stage), 1).Value = pos ' X
-            ws.Cells(laneRows(stage), 2).Value = age ' Y
+            ws.Cells(laneRows(stage), 2).Value = age ' Y (AgeDays)
             laneRows(stage) = laneRows(stage) + 1
+
+            ' Write debug row
+            If writeDebug Then
+                Dim stageName As String
+                stageName = lanes(stage)
+                If idxKey > 0 Then ws.Cells(dbgRow, dbgCol).Value = CStr(lo.DataBodyRange.Cells(r, idxKey).Value)
+                ws.Cells(dbgRow, dbgCol + 1).Value = stageName
+                ws.Cells(dbgRow, dbgCol + 2).Value = age ' AgeDays
+                If idxC > 0 Then ws.Cells(dbgRow, dbgCol + 3).Value = vCreated
+                If idxR > 0 Then ws.Cells(dbgRow, dbgCol + 4).Value = vResolved
+                dbgRow = dbgRow + 1
+            End If
         End If
     Next r
 
@@ -715,7 +1236,8 @@ Private Sub Flow_WriteWIPAging_Data(ByVal lo As ListObject, ByVal ws As Workshee
     ws.Cells(topRow + 1, 1).Resize(1, 2).Font.Bold = True
     
     ' Lane labels under chart area (for visual reference)
-    ws.Cells(laneRows(1) + 1, 1).Value = "1 = To Do | 2 = In Progress | 3 = Testing | 4 = Review"
+    ws.Cells(laneRows(1) + 1, 1).Value = "1 = To Do | 2 = In Progress | 3 = Testing | 4 = Review | 5 = Bugfixes"
+    If writeDebug Then ws.Range(ws.Cells(topRow + 1, dbgCol), ws.Cells(Application.Max(dbgRow - 1, topRow + 1), dbgCol + 4)).EntireColumn.AutoFit
 End Sub
 
 Private Sub Flow_MakeWIPAging_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
@@ -728,22 +1250,72 @@ Private Sub Flow_MakeWIPAging_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
     Set ch = ws.ChartObjects.Add(Left:=20, Top:=ws.Cells(topRow + 1, 1).Top, Width:=560, Height:=320)
     ch.Chart.ChartType = xlXYScatter
     ch.Chart.HasTitle = True
-    ch.Chart.ChartTitle.Text = "WIP Aging (days) by Stage"
+    ch.Chart.ChartTitle.Text = "Aging Work in Progress (days)"
+    On Error Resume Next
+    LogDbg "Flow_WIPChart_Prep", "hdrRow=" & hdr.Row & "; lastRow=" & lastRow & "; topRow=" & topRow
+    On Error GoTo 0
+
+    ' Build colored band columns (green/yellow/orange/red) behind the scatter
+    On Error Resume Next
+    Dim ages() As Double, nA As Long
+    nA = Flow_CollectAges(ws, 5, topRow, ages) ' dbgCol=5 (E)
+    Dim pct50 As Double, pct70 As Double, pct85 As Double, yMaxScale As Double
+    Dim tmpMax As Double: tmpMax = 0
+    Dim ii As Long
+    For ii = 1 To nA
+        If ages(ii) > tmpMax Then tmpMax = ages(ii)
+    Next ii
+    If tmpMax < 1 Then tmpMax = 1
+    yMaxScale = Flow_NiceCeiling(tmpMax, 1)
+    If yMaxScale < 3 Then yMaxScale = 3
+    ' Compute SLE bands from completed items' CycleCalDays (preferred)
+    Dim pct50S As Double, pct70S As Double, pct85S As Double
+    If Not Flow_ComputeSLEFromFacts(Flow_FindFactsTable(), pct50S, pct70S, pct85S) Then
+        ' Fallback: estimate from current ages if facts not available
+        If nA > 0 Then
+            pct50S = Flow_Quantile(ages, nA, 0.5)
+            pct70S = Flow_Quantile(ages, nA, 0.7)
+            pct85S = Flow_Quantile(ages, nA, 0.85)
+        End If
+    End If
+    pct50 = pct50S: pct70 = pct70S: pct85 = pct85S
+    ' Y max should accommodate both points and SLE bands
+    If pct85 > tmpMax Then tmpMax = pct85
+    yMaxScale = Flow_NiceCeiling(tmpMax, 1)
+    If yMaxScale < 3 Then yMaxScale = 3
+    Call Flow_AddWIPBandColumns(ch, ws, topRow, yMaxScale, pct50, pct70, pct85)
 
     Dim rngX As Range, rngY As Range
     Dim r As Long, x As Double, y As Double
     ' Copy rows into temporary hidden columns C:D grouped per lane to form clean series
-    Dim lanes(1 To 4) As Long, startRow As Long: startRow = lastRow + 2
-    Dim laneNames As Variant: laneNames = Array("To Do", "In Progress", "Testing", "Review")
+    Dim startRow As Long: startRow = lastRow + 2
     Dim i As Long
-    For i = 1 To 4: lanes(i) = startRow: Next i
+    Dim laneMax As Integer: laneMax = 4 ' default
+    ' First pass to detect max lane present (supports Bugfixes lane=5)
+    For r = hdr.Row + 2 To lastRow
+        x = Val(ws.Cells(r, 1).Value)
+        y = Val(ws.Cells(r, 2).Value)
+        If y > 0 Then
+            Dim laneDetect As Integer: laneDetect = Application.WorksheetFunction.Round(x, 0)
+            If laneDetect > laneMax Then laneMax = laneDetect
+        End If
+    Next r
+    If laneMax < 4 Then laneMax = 4
+    If laneMax > 5 Then laneMax = 5
+
+    Dim lanes() As Long: ReDim lanes(1 To laneMax)
+    For i = 1 To laneMax: lanes(i) = startRow: Next i
+
+    Dim laneNamesAll As Variant: laneNamesAll = Array("To Do", "In Progress", "Testing", "Review", "Bugfixes")
+    Dim laneNames() As String: ReDim laneNames(1 To laneMax)
+    For i = 1 To laneMax: laneNames(i) = CStr(laneNamesAll(i - 1)): Next i
 
     For r = hdr.Row + 2 To lastRow
         x = Val(ws.Cells(r, 1).Value)
         y = Val(ws.Cells(r, 2).Value)
         If y > 0 Then
-            Dim lane As Integer: lane = WorksheetFunction.Round(x, 0)
-            If lane >= 1 And lane <= 4 Then
+            Dim lane As Integer: lane = Application.WorksheetFunction.Round(x, 0)
+            If lane >= 1 And lane <= laneMax Then
                 ws.Cells(lanes(lane), 3).Value = x
                 ws.Cells(lanes(lane), 4).Value = y
                 lanes(lane) = lanes(lane) + 1
@@ -751,29 +1323,546 @@ Private Sub Flow_MakeWIPAging_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
         End If
     Next r
 
-    For i = 1 To 4
+    For i = 1 To laneMax
         If lanes(i) > startRow Then
             Set rngX = ws.Range(ws.Cells(startRow, 3), ws.Cells(lanes(i) - 1, 3))
             Set rngY = ws.Range(ws.Cells(startRow, 4), ws.Cells(lanes(i) - 1, 4))
             With ch.Chart.SeriesCollection.NewSeries
                 .XValues = rngX
                 .Values = rngY
-                .Name = CStr(laneNames(i - 1))
+                .Name = CStr(laneNames(i))
+                .AxisGroup = xlSecondary
+                On Error Resume Next
+                .MarkerStyle = xlMarkerStyleCircle
+                .MarkerSize = 6
+                .Format.Line.Visible = 0
+                .MarkerForegroundColor = RGB(55,55,55)
+                .MarkerBackgroundColor = RGB(55,55,55)
+                On Error GoTo 0
             End With
+            On Error Resume Next
+            LogDbg "Flow_WIPChart_Series", CStr(laneNames(i)) & " points=" & (lanes(i) - startRow)
+            On Error GoTo 0
             startRow = lanes(i) ' next block continues after prior data
         End If
     Next i
 
-    With ch.Chart.Axes(1) ' xlCategory
+    On Error Resume Next
+    With ch.Chart.Axes(1) ' xlCategory or X axis
         .MinimumScale = 0.5
-        .MaximumScale = 4.5
+        .MaximumScale = laneMax + 0.5
         .HasMajorGridlines = True
         .HasMinorGridlines = False
     End With
-    With ch.Chart.Axes(2) ' xlValue
+    ' Y axis scaling + gridlines after we compute band backdrop
+    With ch.Chart.Axes(2)
         .HasMajorGridlines = True
+        .MinimumScale = 0
     End With
+
+    On Error Resume Next
+    ' Secondary axes for scatter overlay
+    With ch.Chart.Axes(1, xlSecondary)
+        .MinimumScale = 0.5
+        .MaximumScale = laneMax + 0.5
+        .MajorUnit = 1
+    End With
+    With ch.Chart.Axes(2, xlSecondary)
+        .MinimumScale = 0
+        .MaximumScale = yMaxScale
+        .MajorUnit = Flow_NiceMajorUnit(yMaxScale)
+    End With
+    On Error GoTo 0
+
+    ' Draw ActionableAgile-like lane backdrops + WIP labels (using debug data at col E)
+    On Error Resume Next
+    Call Flow_FormatWIPAging_WithBackdrop(ch, ws, topRow)
+    On Error GoTo 0
+    On Error Resume Next
+    Flow_LogChartSeries ch, "Flow_WIPChart_FinalSeries"
+    On Error GoTo 0
 End Sub
+
+Private Sub Flow_AddWIPBandColumns(ByVal ch As ChartObject, ByVal ws As Worksheet, ByVal topRow As Long, ByVal yMax As Double, ByVal p50 As Double, ByVal p70 As Double, ByVal p85 As Double)
+    On Error Resume Next
+    Dim bandCol As Long: bandCol = 10 ' column J start (out of the way)
+    Dim startRow As Long: startRow = topRow + 1
+    ws.Cells(startRow, bandCol).Resize(1, 5).Value = Array("Stage", "Green", "Yellow", "Orange", "Red")
+    Dim lanes As Variant: lanes = Array("To Do", "In Progress", "Testing", "Review", "Bugfixes")
+    Dim g As Double, y As Double, o As Double, r As Double
+    g = IIf(p50 > 0, p50, yMax * 0.5)
+    If g < 0 Then g = 0
+    If g > yMax Then g = yMax
+    ' Yellow = P70 - P50 (or zero if unknown)
+    If p70 > g Then
+        y = p70 - g
+    Else
+        y = 0
+    End If
+    If y < 0 Then y = 0
+    ' Orange = P85 - P70
+    If p85 > (g + y) Then
+        o = p85 - (g + y)
+    Else
+        o = 0
+    End If
+    ' Red = remainder up to yMax
+    r = yMax - (g + y + o)
+    If r < 0 Then r = 0
+    Dim i As Long, row As Long: row = startRow + 1
+    For i = LBound(lanes) To UBound(lanes)
+        ws.Cells(row, bandCol + 0).Value = CStr(lanes(i))
+        ws.Cells(row, bandCol + 1).Value = g
+        ws.Cells(row, bandCol + 2).Value = y
+        ws.Cells(row, bandCol + 3).Value = o
+        ws.Cells(row, bandCol + 4).Value = r
+        row = row + 1
+    Next i
+
+    Dim rngCats As Range
+    Set rngCats = ws.Range(ws.Cells(startRow + 1, bandCol), ws.Cells(startRow + 1 + (UBound(lanes) - LBound(lanes)), bandCol))
+
+    Dim s As Object
+    ' Green
+    Set s = ch.Chart.SeriesCollection.NewSeries
+    s.Name = "BandGreen"
+    s.ChartType = xlColumnStacked
+    s.XValues = rngCats
+    s.Values = ws.Range(ws.Cells(startRow + 1, bandCol + 1), ws.Cells(startRow + 1 + (UBound(lanes) - LBound(lanes)), bandCol + 1))
+    s.Format.Fill.ForeColor.RGB = RGB(146, 208, 80)
+    ' Yellow
+    Set s = ch.Chart.SeriesCollection.NewSeries
+    s.Name = "BandYellow"
+    s.ChartType = xlColumnStacked
+    s.XValues = rngCats
+    s.Values = ws.Range(ws.Cells(startRow + 1, bandCol + 2), ws.Cells(startRow + 1 + (UBound(lanes) - LBound(lanes)), bandCol + 2))
+    s.Format.Fill.ForeColor.RGB = RGB(255, 255, 0)
+    ' Orange
+    Set s = ch.Chart.SeriesCollection.NewSeries
+    s.Name = "BandOrange"
+    s.ChartType = xlColumnStacked
+    s.XValues = rngCats
+    s.Values = ws.Range(ws.Cells(startRow + 1, bandCol + 3), ws.Cells(startRow + 1 + (UBound(lanes) - LBound(lanes)), bandCol + 3))
+    s.Format.Fill.ForeColor.RGB = RGB(255, 192, 0)
+    ' Red
+    Set s = ch.Chart.SeriesCollection.NewSeries
+    s.Name = "BandRed"
+    s.ChartType = xlColumnStacked
+    s.XValues = rngCats
+    s.Values = ws.Range(ws.Cells(startRow + 1, bandCol + 4), ws.Cells(startRow + 1 + (UBound(lanes) - LBound(lanes)), bandCol + 4))
+    s.Format.Fill.ForeColor.RGB = RGB(255, 0, 0)
+
+    ch.Chart.HasLegend = True
+    ' Tighten columns so bands appear as solid blocks per lane
+    On Error Resume Next
+    ch.Chart.ChartGroups(1).Overlap = 100
+    ch.Chart.ChartGroups(1).GapWidth = 20
+    On Error GoTo 0
+    LogDbg "Flow_WIP_Bands", "p50=" & Round(p50,2) & "; p70=" & Round(p70,2) & "; p85=" & Round(p85,2) & "; yMax=" & yMax
+End Sub
+
+Private Sub Flow_FormatWIPAging_WithBackdrop(ByVal ch As ChartObject, ByVal ws As Worksheet, ByVal topRow As Long)
+    Dim dbgCol As Long: dbgCol = 5 ' E
+    Dim r0 As Long: r0 = topRow + 2
+    Dim r1 As Long: r1 = ws.Cells(ws.Rows.Count, dbgCol + 2).End(xlUp).Row
+    If r1 < r0 Then Exit Sub
+
+    Dim counts(1 To 5) As Long
+    Dim ageMax As Double: ageMax = 0
+    Dim r As Long, stageNm As String, age As Double, idx As Integer
+    Dim laneMaxUsed As Integer: laneMaxUsed = 4
+    For r = r0 To r1
+        stageNm = CStr(ws.Cells(r, dbgCol + 1).Value)
+        idx = Flow_StageIndexFromName(stageNm)
+        If idx >= 1 And idx <= 4 Then counts(idx) = counts(idx) + 1
+        If idx = 5 Then counts(5) = counts(5) + 1
+        If idx > laneMaxUsed Then laneMaxUsed = idx
+        age = Val(ws.Cells(r, dbgCol + 2).Value)
+        If age > ageMax Then ageMax = age
+    Next r
+    If ageMax < 1 Then ageMax = 1
+    Dim yMaxScale As Double: yMaxScale = Flow_NiceCeiling(ageMax, 1) ' integer days min step
+    If yMaxScale < 3 Then yMaxScale = 3
+    With ch.Chart.Axes(2)
+        .MaximumScale = yMaxScale
+        .MajorUnit = Flow_NiceMajorUnit(yMaxScale)
+    End With
+    On Error Resume Next
+    With ch.Chart.Axes(2, xlSecondary)
+        .MaximumScale = yMaxScale
+        .MajorUnit = Flow_NiceMajorUnit(yMaxScale)
+        .MinimumScale = 0
+    End With
+    On Error GoTo 0
+    On Error Resume Next
+    LogDbg "Flow_WIP_Axis", "yMax=" & yMaxScale & "; majorUnit=" & Flow_NiceMajorUnit(yMaxScale)
+    LogDbg "Flow_WIP_Counts", "todo=" & counts(1) & "; prog=" & counts(2) & "; test=" & counts(3) & "; rev=" & counts(4)
+    On Error GoTo 0
+
+    ' Add series-only percentile guide lines (no shapes)
+    ' Percentile guide lines from SLE (completed items CycleCalDays)
+    Dim p50 As Double, p70 As Double, p85 As Double
+    If Flow_ComputeSLEFromFacts(Flow_FindFactsTable(), p50, p70, p85) Then
+        Call Flow_AddPercentileLine(ch, p50, "P50", RGB(99, 99, 99), 0.5, laneMaxUsed + 0.5)
+        If p70 > 0 Then Call Flow_AddPercentileLine(ch, p70, "P70", RGB(255, 192, 0), 0.5, laneMaxUsed + 0.5)
+        If p85 > 0 Then Call Flow_AddPercentileLine(ch, p85, "P85", RGB(192, 0, 0), 0.5, laneMaxUsed + 0.5)
+        LogDbg "Flow_WIP_Guides", "P50=" & Round(p50,2) & "; P70=" & Round(p70,2) & "; P85=" & Round(p85,2)
+    Else
+        LogDbg "Flow_WIP_Guides", "no facts; guides skipped"
+    End If
+
+    ' Add WIP counts as data labels via a hidden scatter series on secondary axis
+    On Error Resume Next
+    Dim s As Object
+    For Each s In ch.Chart.SeriesCollection
+        If StrComp(s.Name & "", "WIPCount", vbTextCompare) = 0 Then s.Delete
+    Next s
+    On Error GoTo 0
+    Dim sLbl As Object, lblY As Double
+    lblY = Application.WorksheetFunction.Max(0.5, yMaxScale * 0.06)
+    Set sLbl = ch.Chart.SeriesCollection.NewSeries
+    sLbl.Name = "WIPCount"
+    sLbl.ChartType = xlXYScatter
+    sLbl.AxisGroup = xlSecondary
+    Dim xs() As Double: ReDim xs(1 To laneMaxUsed)
+    Dim ys() As Double: ReDim ys(1 To laneMaxUsed)
+    Dim k As Long
+    For k = 1 To laneMaxUsed
+        xs(k) = k: ys(k) = lblY
+    Next k
+    sLbl.XValues = xs
+    sLbl.Values = ys
+    On Error Resume Next
+    sLbl.MarkerStyle = xlMarkerStyleNone
+    On Error GoTo 0
+    Dim i As Long
+    For i = 1 To laneMaxUsed
+        On Error Resume Next
+        sLbl.Points(i).HasDataLabel = True
+        sLbl.Points(i).DataLabel.Text = "WIP: " & counts(i)
+        On Error GoTo 0
+    Next i
+    ' No shapes anywhere; compatibility preserved
+    LogDbg "Flow_WIP_Overlay", "series labels added"
+    On Error GoTo 0
+End Sub
+
+Private Function Flow_CollectAges(ByVal ws As Worksheet, ByVal dbgCol As Long, ByVal topRow As Long, ByRef ages() As Double) As Long
+    Dim r0 As Long: r0 = topRow + 2
+    Dim r1 As Long: r1 = ws.Cells(ws.Rows.Count, dbgCol + 2).End(xlUp).Row
+    If r1 < r0 Then Exit Function
+    Dim r As Long, v As Double, n As Long
+    For r = r0 To r1
+        v = Val(ws.Cells(r, dbgCol + 2).Value)
+        If v > 0 Then
+            n = n + 1
+            ReDim Preserve ages(1 To n)
+            ages(n) = v
+        End If
+    Next r
+    Flow_CollectAges = n
+End Function
+
+Private Sub Flow_SortDoubles(ByRef arr() As Double, ByVal n As Long)
+    If n <= 1 Then Exit Sub
+    Dim i As Long, j As Long, t As Double
+    For i = 1 To n - 1
+        For j = i + 1 To n
+            If arr(j) < arr(i) Then t = arr(i): arr(i) = arr(j): arr(j) = t
+        Next j
+    Next i
+End Sub
+
+Private Function Flow_Quantile(ByRef arr() As Double, ByVal n As Long, ByVal p As Double) As Double
+    If n = 0 Then Exit Function
+    If p < 0 Then p = 0
+    If p > 1 Then p = 1
+    Dim dup() As Double, i As Long
+    ReDim dup(1 To n)
+    For i = 1 To n: dup(i) = arr(i): Next i
+    Call Flow_SortDoubles(dup, n)
+    Dim pos As Double, k As Long, frac As Double
+    pos = p * (n - 1) + 1  ' 1-based linear interpolation
+    k = Fix(pos)
+    frac = pos - k
+    If k >= n Then
+        Flow_Quantile = dup(n)
+    Else
+        Flow_Quantile = dup(k) + frac * (dup(k + 1) - dup(k))
+    End If
+End Function
+
+Private Sub Flow_AddPercentileLine(ByVal ch As Object, ByVal yVal As Double, ByVal name As String, ByVal color As Long, Optional ByVal xMin As Double = 0.5, Optional ByVal xMax As Double = 4.5)
+    If yVal <= 0 Then Exit Sub
+    On Error Resume Next
+    Dim s As Object
+    For Each s In ch.Chart.SeriesCollection
+        If StrComp(s.Name & "", name, vbTextCompare) = 0 Then s.Delete
+    Next s
+    On Error GoTo 0
+    Dim srs As Object
+    Set srs = ch.Chart.SeriesCollection.NewSeries
+    srs.Name = name
+    srs.ChartType = xlXYScatter
+    On Error Resume Next
+    srs.AxisGroup = xlSecondary
+    On Error GoTo 0
+    srs.XValues = Array(xMin, xMax)
+    Dim y(1 To 2) As Double: y(1) = yVal: y(2) = yVal
+    srs.Values = y
+    On Error Resume Next
+    srs.MarkerStyle = xlMarkerStyleNone
+    On Error GoTo 0
+    srs.Format.Line.ForeColor.RGB = color
+    srs.Format.Line.Weight = 1.5
+End Sub
+
+Private Sub Flow_ClearChartShapes(ByVal ch As ChartObject, ByVal prefix As String)
+    On Error Resume Next
+    Dim s As Object
+    ' Clear shapes drawn inside the chart (older runs)
+    For Each s In ch.Chart.Shapes
+        If Left$(s.Name & "", Len(prefix)) = prefix Or Left$(s.AlternativeText & "", Len(prefix)) = prefix Then s.Delete
+    Next s
+    ' Clear shapes drawn on the worksheet overlaying the chart (current approach)
+    Dim wsHost As Worksheet
+    Set wsHost = ch.Parent
+    For Each s In wsHost.Shapes
+        If Left$(s.Name & "", Len(prefix)) = prefix Or Left$(s.AlternativeText & "", Len(prefix)) = prefix Then s.Delete
+    Next s
+    On Error GoTo 0
+End Sub
+
+Private Sub Flow_LogChartSeries(ByVal ch As Object, ByVal tag As String)
+    On Error Resume Next
+    Dim s As Object, n As Long, info As String
+    For Each s In ch.Chart.SeriesCollection
+        n = s.Points.Count
+        If Len(info) > 0 Then info = info & " | "
+        info = info & CStr(s.Name) & "=" & CStr(n)
+    Next s
+    If Len(info) = 0 Then info = "(no series)"
+    LogDbg tag, info
+    On Error GoTo 0
+End Sub
+
+' -------------------- Sprint Span (Gantt-like) --------------------
+
+Private Function Flow_WriteSprintSpan_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long) As Boolean
+    On Error GoTo Fail
+    Dim idxKey As Long, idxCreated As Long, idxStart As Long, idxResolved As Long, idxSpan As Long
+    On Error Resume Next
+    idxKey = lo.ListColumns("IssueKey").Index
+    idxCreated = Flow_GetColIndex(lo, "Created")
+    idxStart = Flow_GetColIndex(lo, "StartProgress")
+    idxResolved = Flow_GetColIndex(lo, "Resolved")
+    idxSpan = lo.ListColumns("SprintSpan").Index
+    On Error GoTo 0
+    If (idxCreated = 0 And idxStart = 0) Or idxResolved = 0 Then Exit Function
+
+    Dim row As Long: row = topRow
+    ws.Cells(row, 1).Value = "Sprint Spans (>1 sprint)"
+    ws.Cells(row, 1).Font.Bold = True
+    row = row + 1
+    ws.Cells(row, 1).Resize(1, 3).Value = Array("IssueKey", "StartSprint", "Span")
+    ws.Cells(row, 1).Resize(1, 3).Font.Bold = True
+    row = row + 1
+
+    Dim i As Long
+    For i = 1 To lo.ListRows.Count
+        Dim dCreated As Variant, dStart As Variant, dResolved As Variant
+        dCreated = lo.DataBodyRange.Cells(i, idxCreated).Value
+        If idxStart > 0 Then dStart = lo.DataBodyRange.Cells(i, idxStart).Value Else dStart = Empty
+        dResolved = lo.DataBodyRange.Cells(i, idxResolved).Value
+        If Not IsDate(dResolved) Then GoTo NextI
+        Dim sd As Date
+        If IsDate(dStart) Then
+            sd = CDate(dStart)
+        ElseIf IsDate(dCreated) Then
+            sd = CDate(dCreated)
+        End If
+        If sd = 0 Then GoTo NextI
+
+        ' Compute span (prefer SprintSpan if present)
+        Dim span As Long
+        If idxSpan > 0 Then
+            span = CLng(Application.WorksheetFunction.Max(1, Val(lo.DataBodyRange.Cells(i, idxSpan).Value)))
+        Else
+            Dim sprintLen As Long: sprintLen = CLng(Val(GetNameValueOr("SprintLengthDays", "10")))
+            Dim wd As Long: wd = WorkdaysBetween(sd, CDate(dResolved))
+            span = Application.WorksheetFunction.RoundUp(wd / sprintLen, 0)
+        End If
+        If span <= 1 Then GoTo NextI
+
+        ' Determine Start sprint number within quarter of start date
+        Dim yr As Integer: yr = Year(sd)
+        Dim q As Integer: q = Int((Month(sd) - 1) / 3) + 1
+        Dim qStart As Date: qStart = QuarterStartDate(yr, q)
+        Dim startNum As Integer: startNum = Int((sd - qStart) / 14) + 1
+        If startNum < 1 Then startNum = 1
+        If startNum > 7 Then startNum = 7
+
+        If idxKey > 0 Then ws.Cells(row, 1).Value = CStr(lo.DataBodyRange.Cells(i, idxKey).Value) Else ws.Cells(row, 1).Value = "Item " & i
+        ws.Cells(row, 2).Value = startNum
+        ws.Cells(row, 3).Value = span
+        row = row + 1
+NextI:
+    Next i
+
+    If row <= topRow + 2 Then
+        ' nothing written
+        Exit Function
+    End If
+    Flow_WriteSprintSpan_Data = True
+    Exit Function
+Fail:
+End Function
+
+Private Sub Flow_MakeSprintSpan_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
+    Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
+    If lastRow <= hdr.Row + 1 Then Exit Sub
+
+    ' Build helper columns: StartOffset = StartSprint-1, Span = Span
+    Dim r As Long
+    For r = hdr.Row + 1 To lastRow
+        If IsNumeric(ws.Cells(r, hdr.Column + 1).Value) And IsNumeric(ws.Cells(r, hdr.Column + 2).Value) Then
+            ws.Cells(r, hdr.Column + 3).Value = Application.WorksheetFunction.Max(0, CLng(ws.Cells(r, hdr.Column + 1).Value) - 1)
+            ws.Cells(r, hdr.Column + 4).Value = CLng(ws.Cells(r, hdr.Column + 2).Value)
+        End If
+    Next r
+
+    Dim ch As ChartObject
+    Set ch = ws.ChartObjects.Add(Left:=380, Top:=ws.Cells(topRow + 1, 1).Top, Width:=540, Height:=260)
+    ch.Chart.ChartType = xlBarStacked
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartTitle.Text = "Sprint Spans (>1)"
+
+    With ch.Chart
+        .SeriesCollection.NewSeries
+        .SeriesCollection(1).Name = "Start"
+        .SeriesCollection(1).Values = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + 3), ws.Cells(lastRow, hdr.Column + 3))
+        .SeriesCollection(1).XValues = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+        .SeriesCollection.NewSeries
+        .SeriesCollection(2).Name = "Span"
+        .SeriesCollection(2).Values = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + 4), ws.Cells(lastRow, hdr.Column + 4))
+        .SeriesCollection(2).XValues = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+    End With
+
+    ' Hide the Start series fill/border to create a Gantt-like offset
+    On Error Resume Next
+    ch.Chart.SeriesCollection(1).Format.Fill.Visible = 0
+    ch.Chart.SeriesCollection(1).Format.Line.Visible = 0
+    ch.Chart.SeriesCollection(2).Format.Fill.ForeColor.RGB = RGB(45, 98, 163)
+    ch.Chart.Axes(1).ReversePlotOrder = True ' show latest at top
+    ch.Chart.Axes(2).MinimumScale = 0
+    ch.Chart.Axes(2).MaximumScale = 7
+    ch.Chart.Axes(2).MajorUnit = 1
+    On Error GoTo 0
+End Sub
+
+Private Sub ClearChartsOnSheet(ByVal ws As Worksheet)
+    On Error Resume Next
+    Dim co As ChartObject
+    For Each co In ws.ChartObjects
+        co.Delete
+    Next co
+    On Error GoTo 0
+End Sub
+
+Private Function UniquePivotName(ByVal ws As Worksheet, ByVal base As String) As String
+    Dim name As String: name = base
+    Dim i As Long: i = 1
+    Do While PivotNameExists(ws, name)
+        i = i + 1
+        name = base & "_" & CStr(i)
+    Loop
+    UniquePivotName = name
+End Function
+
+Private Function PivotNameExists(ByVal ws As Worksheet, ByVal nm As String) As Boolean
+    On Error Resume Next
+    Dim pt As PivotTable
+    Set pt = ws.PivotTables(nm)
+    PivotNameExists = Not pt Is Nothing
+    On Error GoTo 0
+End Function
+
+Private Function Flow_ComputeSLEFromFacts(ByVal lo As ListObject, ByRef p50 As Double, ByRef p70 As Double, ByRef p85 As Double) As Boolean
+    On Error GoTo Fail
+    If lo Is Nothing Then Exit Function
+    Dim idxCal As Long, idxC As Long, idxR As Long
+    On Error Resume Next
+    idxCal = lo.ListColumns("CycleCalDays").Index
+    On Error GoTo 0
+    idxC = Flow_GetColIndex(lo, "Created")
+    idxR = Flow_GetColIndex(lo, "Resolved")
+
+    Dim vals() As Double, n As Long
+    Dim i As Long, v As Double
+    If idxCal > 0 Then
+        For i = 1 To lo.ListRows.Count
+            v = Val(lo.DataBodyRange.Cells(i, idxCal).Value)
+            If v > 0 Then
+                n = n + 1
+                ReDim Preserve vals(1 To n)
+                vals(n) = v
+            End If
+        Next i
+    ElseIf idxC > 0 And idxR > 0 Then
+        Dim c As Variant, r As Variant
+        For i = 1 To lo.ListRows.Count
+            c = lo.DataBodyRange.Cells(i, idxC).Value
+            r = lo.DataBodyRange.Cells(i, idxR).Value
+            If IsDate(c) And IsDate(r) Then
+                v = DateDiff("d", CDate(c), CDate(r))
+                If v > 0 Then
+                    n = n + 1
+                    ReDim Preserve vals(1 To n)
+                    vals(n) = v
+                End If
+            End If
+        Next i
+    End If
+    If n = 0 Then Exit Function
+    p50 = Flow_Quantile(vals, n, 0.5)
+    p70 = Flow_Quantile(vals, n, 0.7)
+    p85 = Flow_Quantile(vals, n, 0.85)
+    Flow_ComputeSLEFromFacts = True
+    Exit Function
+Fail:
+    Flow_ComputeSLEFromFacts = False
+End Function
+
+Private Function Flow_StageIndexFromName(ByVal nm As String) As Integer
+    Dim n As String: n = LCase$(Trim$(nm))
+    If InStr(n, "to do") > 0 Or InStr(n, "todo") > 0 Then Flow_StageIndexFromName = 1: Exit Function
+    If InStr(n, "in progress") > 0 Or InStr(n, "progress") > 0 Then Flow_StageIndexFromName = 2: Exit Function
+    If InStr(n, "testing") > 0 Or InStr(n, "test") > 0 Then Flow_StageIndexFromName = 3: Exit Function
+    If InStr(n, "review") > 0 Then Flow_StageIndexFromName = 4: Exit Function
+    If InStr(n, "bug") > 0 Or InStr(n, "defect") > 0 Or InStr(n, "bugfix") > 0 Or InStr(n, "bugfixes") > 0 Then Flow_StageIndexFromName = 5: Exit Function
+End Function
+
+Private Function Flow_NiceCeiling(ByVal v As Double, ByVal stepMin As Double) As Double
+    Dim s As Double
+    s = stepMin
+    If v > 20 Then
+        s = 5
+    ElseIf v > 10 Then
+        s = 2
+    Else
+        s = stepMin
+    End If
+    If s <= 0 Then s = 1
+    Flow_NiceCeiling = s * Application.WorksheetFunction.RoundUp(v / s, 0)
+End Function
+
+Private Function Flow_NiceMajorUnit(ByVal yMax As Double) As Double
+    If yMax <= 5 Then Flow_NiceMajorUnit = 1: Exit Function
+    If yMax <= 10 Then Flow_NiceMajorUnit = 2: Exit Function
+    If yMax <= 20 Then Flow_NiceMajorUnit = 5: Exit Function
+    Flow_NiceMajorUnit = 10
+End Function
 
 Private Sub SeedNamedValues()
     Dim ws As Worksheet: Set ws = EnsureConfig()
@@ -785,6 +1874,9 @@ Private Sub SeedNamedValues()
     EnsureNamedValue "DefaultHoursPerPoint", ws.Range("H7"), 6
     EnsureNamedValue "RolesWithVelocity", ws.Range("H8"), "Developer,QA"
     EnsureNamedValue "VerboseLogging", ws.Range("H9"), True
+    ' Optional formatting for sprint tag names shown in charts/metrics
+    ' Tokens: {YYYY},{YY},{Q},{S},{TEAM}
+    EnsureNamedValue "SprintNamePattern", ws.Range("H10"), "{YYYY} Q{Q} S{S}"
     WriteSettingsLabels ws
     WriteGettingStarted
     EnsureDashboard
@@ -919,6 +2011,7 @@ Private Sub WriteSettingsLabels(ByVal ws As Worksheet)
     ws.Range("G7").Value = "DefaultHoursPerPoint"
     ws.Range("G8").Value = "RolesWithVelocity (comma list)"
     ws.Range("G9").Value = "VerboseLogging (TRUE/FALSE)"
+    ws.Range("G10").Value = "SprintNamePattern (tokens {YYYY},{YY},{Q},{S},{TEAM})"
     ws.Columns("G:H").AutoFit
 End Sub
 
@@ -1501,6 +2594,28 @@ Private Function FormatSprintTag(ByVal startDate As Date) As String
     FormatSprintTag = yr & " Q" & q & " S" & s
 End Function
 
+' Build a sprint tag string from a date using a pattern stored in name 'SprintNamePattern'.
+' Tokens supported: {YYYY},{YY},{Q},{S},{TEAM}
+Private Function FormatSprintName(ByVal d As Date) As String
+    If d = 0 Then Exit Function
+    Dim yr As Integer: yr = Year(d)
+    Dim q As Integer: q = Int((Month(d) - 1) / 3) + 1
+    Dim qStart As Date: qStart = DateSerial(yr, (q - 1) * 3 + 1, 1)
+    Dim daysFromQ As Long: daysFromQ = CLng(d - qStart)
+    Dim s As Integer: s = Int(daysFromQ / 14) + 1
+    If s < 1 Then s = 1
+    If s > 7 Then s = 7
+    Dim pat As String: pat = GetNameValueOr("SprintNamePattern", "{YYYY} Q{Q} S{S}")
+    Dim team As String: team = GetNameValueOr("ActiveTeam", "Team")
+    Dim yy As String: yy = Right$(CStr(yr), 2)
+    pat = Replace$(pat, "{YYYY}", CStr(yr))
+    pat = Replace$(pat, "{YY}", yy)
+    pat = Replace$(pat, "{Q}", CStr(q))
+    pat = Replace$(pat, "{S}", CStr(s))
+    pat = Replace$(pat, "{TEAM}", team)
+    FormatSprintName = pat
+End Function
+
 Private Function ParseTagFromName(ByVal nm As String, ByRef yr As Integer, ByRef q As Integer, ByRef s As Integer) As Boolean
     On Error GoTo Fail
     Dim base As String
@@ -1840,6 +2955,7 @@ Private Sub Jira_CreatePivotsAndCharts()
     If lo Is Nothing Or lo.ListRows.Count = 0 Then Err.Raise 1004, , "Jira_Facts empty"
 
     Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Insights")
+    ClearChartsOnSheet ws
     ws.Cells.Clear
     ws.Range("A1").Value = "Jira Insights"
     ws.Range("A1").Font.Bold = True
@@ -1941,7 +3057,7 @@ Private Sub Jira_CreatePivotsAndCharts()
     Dim pt2 As PivotTable
     Dim rowStart As Long
     rowStart = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 2
-    Set pt2 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:="ptSPDist")
+    Set pt2 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:=UniquePivotName(ws, "ptSPDist"))
     With pt2
         On Error Resume Next
         .PivotFields("StoryPoints").Orientation = xlRowField
@@ -1959,7 +3075,7 @@ Private Sub Jira_CreatePivotsAndCharts()
     ' Pivot 2: Quarter summary
     Dim pt3 As PivotTable
     rowStart = pt2.TableRange2.Row + pt2.TableRange2.Rows.Count + 2
-    Set pt3 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:="ptQuarter")
+    Set pt3 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:=UniquePivotName(ws, "ptQuarter"))
     With pt3
         On Error Resume Next
         .PivotFields("QuarterTag").Orientation = xlRowField
@@ -2392,12 +3508,17 @@ Private Sub EnsureRawDataSheet()
         Dim created As Date: created = base + ((i - 1) * 2 Mod 70) + TimeSerial((i * 2) Mod 24, (i * 7) Mod 60, 0)
         Dim sp As Variant: sp = spPool(i - 1)
 
-        ' Time-in-status (days, decimals)
+        ' Time-in-status (days) — more realistic distribution to produce a wider CT range
         Dim tTodo As Double, tProg As Double, tTest As Double, tRev As Double
-        tTodo = Round(0.05 + ((i Mod 5) * 0.11), 2)
-        tProg = Round(0.25 + ((sp Mod 8) * 0.35), 2)
-        tTest = Round(((i Mod 4) * 0.12), 2)
-        tRev = Round(((i Mod 3) * 0.10), 2)
+        Dim baseDays As Double
+        baseDays = sp * 2 + ((i Mod 5) - 2) ' +/- 2 days variability
+        If i Mod 12 = 0 Then baseDays = baseDays + sp ' occasional overrun
+        If i Mod 11 = 0 Then baseDays = baseDays - sp ' occasional underrun
+        If baseDays < 1 Then baseDays = 1
+        tTodo = Round(Application.WorksheetFunction.Max(0.5, baseDays * 0.05), 2)
+        tProg = Round(Application.WorksheetFunction.Max(0.5, baseDays * 0.7), 2)
+        tTest = Round(Application.WorksheetFunction.Max(0, baseDays * 0.15), 2)
+        tRev = Round(Application.WorksheetFunction.Max(0, baseDays * 0.10), 2)
 
         Dim startProg As Date: startProg = created + tTodo
         Dim updated As Date: updated = startProg + tProg
@@ -2447,7 +3568,7 @@ Public Sub Jira_NormalizeIssues(ByVal rawSheet As String, ByVal rawTable As Stri
     On Error Resume Next: Set lo = ws.ListObjects("tblJiraFacts"): On Error GoTo 0
     If lo Is Nothing Then
         Dim headers As Variant
-        headers = Array("IssueKey","Summary","IssueType","Status","Epic","Created","StartProgress","Resolved","StoryPoints","CycleDays","SprintSpan","IsCrossSprint","QuarterTag","YearTag","FixVersion","CreatedMonth","CycleCalDays","LeadCalDays")
+        headers = Array("IssueKey","Summary","IssueType","Status","Epic","Created","StartProgress","Resolved","StoryPoints","CycleDays","SprintSpan","IsCrossSprint","QuarterTag","YearTag","SprintTag","FixVersion","CreatedMonth","CycleCalDays","LeadCalDays")
         Set lo = EnsureTable(ws, "tblJiraFacts", headers)
     Else
         If Not lo.DataBodyRange Is Nothing Then lo.DataBodyRange.ClearContents
@@ -2479,13 +3600,15 @@ Public Sub Jira_NormalizeIssues(ByVal rawSheet As String, ByVal rawTable As Stri
         Dim refDate As Date: refDate = IIf(resolved = 0, created, resolved)
         out.Range(1, 13).Value = Year(refDate) & " Q" & Int((Month(refDate) - 1) / 3 + 1)
         out.Range(1, 14).Value = Year(refDate)
+        ' SprintTag based on refDate (resolved if present else created)
+        out.Range(1, 15).Value = FormatSprintName(refDate)
         ' FixVersion and CreatedMonth
-        out.Range(1, 15).Value = GetCellBy(loRaw, r, map, "FixVersion")
-        If created <> 0 Then out.Range(1, 16).Value = DateSerial(Year(created), Month(created), 1)
+        out.Range(1, 16).Value = GetCellBy(loRaw, r, map, "FixVersion")
+        If created <> 0 Then out.Range(1, 17).Value = DateSerial(Year(created), Month(created), 1)
         ' Calendar day metrics
         If created <> 0 And resolved <> 0 Then
-            out.Range(1, 17).Value = DateDiff("d", created, resolved)
-            If startProg <> 0 Then out.Range(1, 18).Value = DateDiff("d", created, resolved) ' lead time same; cycle from start can be DateDiff("d", startProg, resolved)
+            out.Range(1, 18).Value = DateDiff("d", created, resolved)
+            If startProg <> 0 Then out.Range(1, 19).Value = DateDiff("d", created, resolved) ' lead time same; cycle from start can be DateDiff("d", startProg, resolved)
         End If
     Next r
 
@@ -2570,6 +3693,43 @@ Private Function WorkdaysBetween(ByVal d1 As Date, ByVal d2 As Date) As Long
         s = s + 1
     Loop
     WorkdaysBetween = n
+End Function
+
+' Parse durations that may include unit suffixes like "2.5d", "3d 4h", or "5h".
+' Returns days using DefaultHoursPerDay to convert hours.
+Private Function ParseDurationDays(ByVal v As Variant) As Double
+    On Error Resume Next
+    If IsNumeric(v) Then
+        ParseDurationDays = CDbl(v)
+        Exit Function
+    End If
+    Dim s As String: s = LCase$(Trim$(CStr(v)))
+    If Len(s) = 0 Then Exit Function
+    Dim hoursPerDay As Double
+    hoursPerDay = Val(GetNameValueOr("DefaultHoursPerDay", "8"))
+    If hoursPerDay <= 0 Then hoursPerDay = 8
+
+    Dim tokens As Variant: tokens = Split(s, " ")
+    Dim i As Long, t As String, total As Double
+    For i = LBound(tokens) To UBound(tokens)
+        t = Trim$(tokens(i))
+        If Len(t) = 0 Then GoTo NextTok
+        If InStr(1, t, "d", vbTextCompare) > 0 Then
+            total = total + Val(t)
+        ElseIf InStr(1, t, "h", vbTextCompare) > 0 Then
+            total = total + Val(t) / hoursPerDay
+        Else
+            ' bare number
+            total = total + Val(t)
+        End If
+NextTok:
+    Next i
+    If total = 0 Then
+        ' last-resort: strip common suffixes
+        s = Replace$(s, "days", ""): s = Replace$(s, "day", ""): s = Replace$(s, "d", "")
+        total = Val(s)
+    End If
+    ParseDurationDays = total
 End Function
 
 Private Sub ComputeSummaryMetrics(ByVal lo As ListObject, ByRef avgCycle As Double, ByRef totalItems As Long, ByRef avgSPPerSprint As Double)
@@ -2922,13 +4082,16 @@ Private Sub JiraParseSprints(ByVal json As String, ByRef ids() As Long, ByRef st
 End Sub
 
 Private Function JiraExtractEstimate(ByVal json As String, ByVal key As String) As Double
-    Dim pat As String
-    pat = "\"" & key & "\":{""value"":" ' not real regex; just find start
-    Dim i As Long: i = InStr(1, json, "\"" & key & "\":{", vbTextCompare)
+    Dim i As Long, j As Long
+    Dim look As String
+    look = Chr$(34) & key & Chr$(34) & ":{"  ' "key":{
+    i = InStr(1, json, look, vbTextCompare)
     If i = 0 Then Exit Function
-    Dim j As Long: j = InStr(i, json, "\"value\":" , vbTextCompare)
+    Dim valTag As String
+    valTag = Chr$(34) & "value" & Chr$(34) & ":"
+    j = InStr(i, json, valTag, vbTextCompare)
     If j = 0 Then Exit Function
-    JiraExtractEstimate = CDbl(ParseNumberAfter(json, j + 8))
+    JiraExtractEstimate = CDbl(ParseNumberAfter(json, j + Len(valTag)))
 End Function
 
 Private Function ParseNumberAfter(ByVal s As String, ByVal pos As Long) As Double
@@ -2946,10 +4109,13 @@ Private Function ParseNumberAfter(ByVal s As String, ByVal pos As Long) As Doubl
 End Function
 
 Private Function FindJsonString(ByVal s As String, ByVal startAt As Long, ByVal key As String) As String
-    Dim i As Long: i = InStr(startAt, s, "\"" & key & "\":\"", vbTextCompare)
+    Dim i As Long, j As Long
+    Dim look As String
+    look = Chr$(34) & key & Chr$(34) & ":" & Chr$(34)
+    i = InStr(startAt, s, look, vbTextCompare)
     If i = 0 Then Exit Function
-    i = i + Len(key) + 4
-    Dim j As Long: j = InStr(i, s, "\"")
+    i = i + Len(look)
+    j = InStr(i, s, Chr$(34))
     If j > i Then FindJsonString = Mid$(s, i, j - i)
 End Function
 
