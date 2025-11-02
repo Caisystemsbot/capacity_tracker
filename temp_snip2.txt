@@ -1,0 +1,19 @@
+    ws.Range("G9").Value = "VerboseLogging (TRUE/FALSE)"
+    ws.Range("G10").Value = "SprintNamePattern (tokens {YYYY},{YY},{Q},{S},{TEAM})"
+    ws.Columns("G:H").AutoFit
+End Sub
+
+Private Sub RemoveSheetIfExists(ByVal name As String)
+    On Error Resume Next
+    Application.DisplayAlerts = False
+    Worksheets(name).Delete
+    Application.DisplayAlerts = True
+    On Error GoTo 0
+End Sub
+
+Private Sub WriteGettingStarted()
+    Dim ws As Worksheet: Set ws = EnsureSheet("Getting_Started")
+    ws.Cells.Clear
+    ws.Range("A1").Value = "Getting Started"
+    ws.Range("A2").Value = "1) Populate your team roster on sheet 'Config' table 'tblRoster'."
+    ws.Range("A3").Value = "   Columns: Member, Role, ContributesToVelocity (Yes/No)"
