@@ -2341,7 +2341,14 @@ Private Sub EnsureDashboard()
     On Error Resume Next
     btn2.Name = UniqueShapeName(ws, "btnAdvanceAvailability")
     On Error GoTo 0
-    btn2.OnAction = "CreateOrAdvanceAvailability"
+    Dim ao2 As String: ao2 = "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!CreateOrAdvanceAvailability"
+    On Error Resume Next
+    btn2.OnAction = ao2
+    If Err.Number <> 0 Then
+        Err.Clear
+        ws.Shapes(btn2.Name).OnAction = ao2
+    End If
+    On Error GoTo 0
     btn2.Characters.Text = "Create/Advance Availability"
 
     ' (Removed) Build Jira Insights button; use Sanitize Raw + Build Insights instead
@@ -2352,7 +2359,14 @@ Private Sub EnsureDashboard()
     On Error Resume Next
     btn4.Name = UniqueShapeName(ws, "btnSanitizeRawAndBuild")
     On Error GoTo 0
-    btn4.OnAction = "SanitizeRawAndBuildInsights"
+    Dim ao4 As String: ao4 = "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!SanitizeRawAndBuildInsights"
+    On Error Resume Next
+    btn4.OnAction = ao4
+    If Err.Number <> 0 Then
+        Err.Clear
+        ws.Shapes(btn4.Name).OnAction = ao4
+    End If
+    On Error GoTo 0
     btn4.Characters.Text = "Sanitize Raw + Build Insights"
 
     ' Button: Refresh Samples
@@ -2361,7 +2375,14 @@ Private Sub EnsureDashboard()
     On Error Resume Next
     btn5.Name = UniqueShapeName(ws, "btnRefreshSamples")
     On Error GoTo 0
-    btn5.OnAction = "RefreshSamples"
+    Dim ao5 As String: ao5 = "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!RefreshSamples"
+    On Error Resume Next
+    btn5.OnAction = ao5
+    If Err.Number <> 0 Then
+        Err.Clear
+        ws.Shapes(btn5.Name).OnAction = ao5
+    End If
+    On Error GoTo 0
     btn5.Characters.Text = "Refresh Samples"
 End Sub
 
