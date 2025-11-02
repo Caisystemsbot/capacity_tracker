@@ -3410,9 +3410,7 @@ Private Sub Jira_CreatePivotsAndCharts()
                 Next j
             End If
         Next i2
-        ' Style the 2-column summary as a compact table
-        Insights_FormatAsTable ws, ws.Cells(thr.Row + 1, thr.Column), row2 - 1, thr.Column + 1, _
-            "tblInsights_SPAvg", "TableStyleLight9"
+        ' Write the summary rows, then format as a compact table
         Dim row2 As Long: row2 = thr.Row + 2
         For i2 = LBound(cats) To UBound(cats)
             ws.Cells(row2, thr.Column).Value = cats(i2)
@@ -3423,6 +3421,10 @@ Private Sub Jira_CreatePivotsAndCharts()
             End If
             row2 = row2 + 1
         Next i2
+        ' Now style the 2-column summary area as an Excel table
+        Dim lastRow2 As Long: lastRow2 = row2 - 1
+        Insights_FormatAsTable ws, ws.Cells(thr.Row + 1, thr.Column), lastRow2, thr.Column + 1, _
+            "tblInsights_SPAvg", "TableStyleLight9"
     End If
 
     ' Build pivots (Epic summary removed by request)
