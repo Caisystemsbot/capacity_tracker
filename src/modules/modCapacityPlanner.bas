@@ -3113,9 +3113,39 @@ Private Sub Jira_CreatePivotsAndCharts()
     Dim ch0 As ChartObject
     Set ch0 = ws.ChartObjects.Add(Left:=400, Top:=ws.Range("A3").Top, Width:=420, Height:=260)
     ch0.Chart.ChartType = xlColumnClustered
-    ch0.Chart.SetSourceData ws.Range(ws.Cells(startStats.Row, startStats.Column), ws.Cells(lastRowStats, startStats.Column + 2))
     ch0.Chart.HasTitle = True
     ch0.Chart.ChartTitle.Text = "Avg Days by Story Points"
+    ' Build series explicitly to avoid plotting the Story Points column as a data series
+    ' and restrict X axis to canonical SP buckets: 1,2,3,5,8,13
+    Dim cats As Variant: cats = Array(1, 2, 3, 5, 8, 13)
+    Dim iCat As Long, rFind As Long
+    Dim avgVals() As Double, sdVals() As Double
+    ReDim avgVals(1 To UBound(cats) - LBound(cats) + 1)
+    ReDim sdVals(1 To UBound(cats) - LBound(cats) + 1)
+    For iCat = LBound(cats) To UBound(cats)
+        ' Default to 0 if not found
+        avgVals(iCat - LBound(cats) + 1) = 0
+        sdVals(iCat - LBound(cats) + 1) = 0
+        For rFind = startStats.Row + 1 To lastRowStats
+            If CLng(Val(ws.Cells(rFind, startStats.Column).Value)) = CLng(cats(iCat)) Then
+                avgVals(iCat - LBound(cats) + 1) = Val(ws.Cells(rFind, startStats.Column + 1).Value)
+                sdVals(iCat - LBound(cats) + 1) = Val(ws.Cells(rFind, startStats.Column + 2).Value)
+                Exit For
+            End If
+        Next rFind
+    Next iCat
+    With ch0.Chart.SeriesCollection.NewSeries
+        .Name = "Avg Days"
+        .XValues = cats
+        .Values = avgVals
+        .ChartType = xlColumnClustered
+    End With
+    With ch0.Chart.SeriesCollection.NewSeries
+        .Name = "StDev Days"
+        .XValues = cats
+        .Values = sdVals
+        .ChartType = xlColumnClustered
+    End With
 
     ' Cycle Time Analysis (calendar days)
     Dim meanCT As Double, medCT As Double, sdCT As Double, outCT As Long
@@ -3156,7 +3186,7 @@ Private Sub Jira_CreatePivotsAndCharts()
     idxCycle2 = lo.ListColumns("CycleDays").Index
     On Error GoTo 0
     If idxSP2 > 0 And idxCycle2 > 0 Then
-        Dim cats As Variant: cats = Array(1, 2, 3, 5, 8, 13)
+        ' Reuse cats from earlier chart (1,2,3,5,8,13) to avoid duplicate declaration
         Dim sums2 As Object: Set sums2 = CreateObject("Scripting.Dictionary")
         Dim counts2 As Object: Set counts2 = CreateObject("Scripting.Dictionary")
         Dim i2 As Long
