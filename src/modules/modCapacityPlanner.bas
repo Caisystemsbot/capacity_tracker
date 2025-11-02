@@ -1940,6 +1940,9 @@ Private Sub SeedNamedValues()
     ' Optional formatting for sprint tag names shown in charts/metrics
     ' Tokens: {YYYY},{YY},{Q},{S},{TEAM}
     EnsureNamedValue "SprintNamePattern", ws.Range("H10"), "{YYYY} Q{Q} S{S}"
+    ' Bug metrics (optional)
+    EnsureNamedValue "BugCountBasis", ws.Range("H11"), "Both"  ' One of: Both/Created/Resolved
+    EnsureNamedValue "BugIssueTypes", ws.Range("H12"), "Bug,Defect"
     WriteSettingsLabels ws
     WriteGettingStarted
     EnsureDashboard
@@ -2075,6 +2078,8 @@ Private Sub WriteSettingsLabels(ByVal ws As Worksheet)
     ws.Range("G8").Value = "RolesWithVelocity (comma list)"
     ws.Range("G9").Value = "VerboseLogging (TRUE/FALSE)"
     ws.Range("G10").Value = "SprintNamePattern (tokens {YYYY},{YY},{Q},{S},{TEAM})"
+    ws.Range("G11").Value = "BugCountBasis (Both/Created/Resolved)"
+    ws.Range("G12").Value = "BugIssueTypes (comma list)"
     ws.Columns("G:H").AutoFit
 End Sub
 
@@ -2795,6 +2800,41 @@ Private Function GetNameValueOr(ByVal nm As String, ByVal fallback As String) As
     GetNameValueOr = v
 End Function
 
+' -------------------- Bug metrics helpers --------------------
+
+Private Function GetBugCountBasis() As String
+    Dim s As String
+    s = Trim$(CStr(GetNameValueOr("BugCountBasis", "Both")))
+    If StrComp(s, "created", vbTextCompare) = 0 Then
+        GetBugCountBasis = "Created"
+    ElseIf StrComp(s, "resolved", vbTextCompare) = 0 Then
+        GetBugCountBasis = "Resolved"
+    Else
+        GetBugCountBasis = "Both"
+    End If
+End Function
+
+Private Function IsBugIssueType(ByVal issueType As String) As Boolean
+    Dim raw As String
+    raw = CStr(GetNameValueOr("BugIssueTypes", "Bug,Defect"))
+    Dim list As Variant: list = Split(raw, ",")
+    Dim i As Long, needle As String, hay As String
+    hay = LCase$(Trim$(issueType))
+    For i = LBound(list) To UBound(list)
+        needle = LCase$(Trim$(CStr(list(i))))
+        If Len(needle) > 0 Then
+            If InStr(1, hay, needle, vbTextCompare) > 0 Then IsBugIssueType = True: Exit Function
+        End If
+    Next i
+End Function
+
+Private Function FormatQuarterTagFromDate(ByVal d As Date) As String
+    If d = 0 Then Exit Function
+    Dim yr As Integer: yr = Year(d)
+    Dim q As Integer: q = Int((Month(d) - 1) / 3) + 1
+    FormatQuarterTagFromDate = CStr(yr) & " Q" & CStr(q)
+End Function
+
 Private Function PromptForDate(ByVal prompt As String) As Date
     Dim s As String
     s = InputBox(prompt, "Sprint Start Date", Format$(Date, "m/d/yyyy"))
@@ -3281,6 +3321,10 @@ Private Sub Jira_CreatePivotsAndCharts()
 
     ' Append Flow Metrics onto Jira_Insights (consolidated view; no separate tab)
     On Error Resume Next
+    ' Insert Bug Metrics (Sprint and Quarter) before appending Flow charts
+    Dim topBM As Long: topBM = NextFreeRow(ws)
+    topBM = Jira_WriteBugMetrics_Sprint(lo, ws, topBM)
+    topBM = Jira_WriteBugMetrics_Quarter(lo, ws, topBM + 2)
     Flow_AppendChartsToSheet lo, ws
     On Error GoTo 0
 End Sub
@@ -3340,6 +3384,222 @@ Private Sub WritePerPointTimeStats(ByVal lo As ListObject, ByVal dest As Range)
         row = row + 1
     Next j
 End Sub
+
+' -------------------- Bug Metrics (Sprint & Quarter) --------------------
+
+Private Function Jira_WriteBugMetrics_Sprint(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long) As Long
+    On Error GoTo Fail
+    Dim idxT As Long, idxC As Long, idxR As Long
+    On Error Resume Next
+    idxT = lo.ListColumns("IssueType").Index
+    idxC = lo.ListColumns("Created").Index
+    idxR = lo.ListColumns("Resolved").Index
+    On Error GoTo 0
+    If idxT = 0 Or idxC = 0 Then Jira_WriteBugMetrics_Sprint = topRow: Exit Function
+
+    Dim createdBy As Object, resolvedBy As Object
+    Set createdBy = CreateObject("Scripting.Dictionary")
+    Set resolvedBy = CreateObject("Scripting.Dictionary")
+
+    Dim i As Long, it As String, c As Variant, r As Variant, tag As String
+    For i = 1 To lo.ListRows.Count
+        it = CStr(lo.DataBodyRange.Cells(i, idxT).Value)
+        If IsBugIssueType(it) Then
+            c = lo.DataBodyRange.Cells(i, idxC).Value
+            If IsDate(c) Then
+                tag = FormatSprintName(CDate(c))
+                If Not createdBy.Exists(tag) Then createdBy(tag) = 0
+                createdBy(tag) = CLng(createdBy(tag)) + 1
+            End If
+            If idxR > 0 Then
+                r = lo.DataBodyRange.Cells(i, idxR).Value
+                If IsDate(r) Then
+                    tag = FormatSprintName(CDate(r))
+                    If Not resolvedBy.Exists(tag) Then resolvedBy(tag) = 0
+                    resolvedBy(tag) = CLng(resolvedBy(tag)) + 1
+                End If
+            End If
+        End If
+    Next i
+    If createdBy.Count = 0 And resolvedBy.Count = 0 Then Jira_WriteBugMetrics_Sprint = topRow: Exit Function
+
+    ' Merge keys and sort alphabetically (pattern-based names may vary)
+    Dim dictKeys As Object: Set dictKeys = CreateObject("Scripting.Dictionary")
+    Dim k As Variant
+    For Each k In createdBy.Keys: dictKeys(CStr(k)) = True: Next k
+    For Each k In resolvedBy.Keys: dictKeys(CStr(k)) = True: Next k
+    Dim keys() As Variant: keys = dictKeys.Keys
+    Dim a As Long, b As Long
+    For a = LBound(keys) To UBound(keys) - 1
+        For b = a + 1 To UBound(keys)
+            If CStr(keys(b)) < CStr(keys(a)) Then
+                Dim tmp As Variant: tmp = keys(a): keys(a) = keys(b): keys(b) = tmp
+            End If
+        Next b
+    Next a
+
+    ' Write table header
+    ws.Cells(topRow, 1).Value = "Bug Metrics – Sprint"
+    ws.Cells(topRow, 1).Font.Bold = True
+    ws.Cells(topRow + 1, 1).Resize(1, 4).Value = Array("Sprint", "BugsCreated", "BugsResolved", "BugBacklogAfter")
+    ws.Cells(topRow + 1, 1).Resize(1, 4).Font.Bold = True
+
+    Dim row As Long: row = topRow + 2
+    Dim backlog As Long: backlog = 0
+    Dim basis As String: basis = GetBugCountBasis()
+    For a = LBound(keys) To UBound(keys)
+        Dim cr As Long, rs As Long
+        If createdBy.Exists(keys(a)) Then cr = CLng(createdBy(keys(a))) Else cr = 0
+        If resolvedBy.Exists(keys(a)) Then rs = CLng(resolvedBy(keys(a))) Else rs = 0
+        backlog = backlog + cr - rs
+        ws.Cells(row, 1).Value = CStr(keys(a))
+        ws.Cells(row, 2).Value = cr
+        ws.Cells(row, 3).Value = rs
+        ws.Cells(row, 4).Value = backlog
+        row = row + 1
+    Next a
+
+    ' Build chart
+    Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
+    Dim ch As ChartObject
+    Set ch = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(topRow, 1).Top, Width:=520, Height:=280)
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartTitle.Text = "Bugs per Sprint (Created vs Resolved)"
+
+    If StrComp(basis, "Created", vbTextCompare) = 0 Or StrComp(basis, "Both", vbTextCompare) = 0 Then
+        With ch.Chart.SeriesCollection.NewSeries
+            .Name = "Created"
+            .XValues = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+            .Values = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + 1), ws.Cells(lastRow, hdr.Column + 1))
+            .ChartType = xlColumnClustered
+        End With
+    End If
+    If StrComp(basis, "Resolved", vbTextCompare) = 0 Or StrComp(basis, "Both", vbTextCompare) = 0 Then
+        With ch.Chart.SeriesCollection.NewSeries
+            .Name = "Resolved"
+            .XValues = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+            .Values = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + 2), ws.Cells(lastRow, hdr.Column + 2))
+            .ChartType = xlColumnClustered
+        End With
+    End If
+
+    ' Backlog as line on secondary axis
+    With ch.Chart.SeriesCollection.NewSeries
+        .Name = "Backlog"
+        .XValues = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+        .Values = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + 3), ws.Cells(lastRow, hdr.Column + 3))
+        .ChartType = xlLine
+        On Error Resume Next
+        .AxisGroup = xlSecondary
+        On Error GoTo 0
+    End With
+
+    Jira_WriteBugMetrics_Sprint = row
+    Exit Function
+Fail:
+    Jira_WriteBugMetrics_Sprint = topRow
+End Function
+
+Private Function Jira_WriteBugMetrics_Quarter(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long) As Long
+    On Error GoTo Fail
+    Dim idxT As Long, idxC As Long, idxR As Long
+    On Error Resume Next
+    idxT = lo.ListColumns("IssueType").Index
+    idxC = lo.ListColumns("Created").Index
+    idxR = lo.ListColumns("Resolved").Index
+    On Error GoTo 0
+    If idxT = 0 Or idxC = 0 Then Jira_WriteBugMetrics_Quarter = topRow: Exit Function
+
+    Dim createdBy As Object, resolvedBy As Object
+    Set createdBy = CreateObject("Scripting.Dictionary")
+    Set resolvedBy = CreateObject("Scripting.Dictionary")
+
+    Dim i As Long, it As String, c As Variant, r As Variant, tag As String
+    For i = 1 To lo.ListRows.Count
+        it = CStr(lo.DataBodyRange.Cells(i, idxT).Value)
+        If IsBugIssueType(it) Then
+            c = lo.DataBodyRange.Cells(i, idxC).Value
+            If IsDate(c) Then
+                tag = FormatQuarterTagFromDate(CDate(c))
+                If Not createdBy.Exists(tag) Then createdBy(tag) = 0
+                createdBy(tag) = CLng(createdBy(tag)) + 1
+            End If
+            If idxR > 0 Then
+                r = lo.DataBodyRange.Cells(i, idxR).Value
+                If IsDate(r) Then
+                    tag = FormatQuarterTagFromDate(CDate(r))
+                    If Not resolvedBy.Exists(tag) Then resolvedBy(tag) = 0
+                    resolvedBy(tag) = CLng(resolvedBy(tag)) + 1
+                End If
+            End If
+        End If
+    Next i
+    If createdBy.Count = 0 And resolvedBy.Count = 0 Then Jira_WriteBugMetrics_Quarter = topRow: Exit Function
+
+    ' Merge keys and sort alphabetically
+    Dim dictKeys As Object: Set dictKeys = CreateObject("Scripting.Dictionary")
+    Dim k As Variant
+    For Each k In createdBy.Keys: dictKeys(CStr(k)) = True: Next k
+    For Each k In resolvedBy.Keys: dictKeys(CStr(k)) = True: Next k
+    Dim keys() As Variant: keys = dictKeys.Keys
+    Dim a As Long, b As Long
+    For a = LBound(keys) To UBound(keys) - 1
+        For b = a + 1 To UBound(keys)
+            If CStr(keys(b)) < CStr(keys(a)) Then
+                Dim tmp As Variant: tmp = keys(a): keys(a) = keys(b): keys(b) = tmp
+            End If
+        Next b
+    Next a
+
+    ' Write table
+    ws.Cells(topRow, 1).Value = "Bug Metrics – Quarter"
+    ws.Cells(topRow, 1).Font.Bold = True
+    ws.Cells(topRow + 1, 1).Resize(1, 3).Value = Array("Quarter", "BugsCreated", "BugsResolved")
+    ws.Cells(topRow + 1, 1).Resize(1, 3).Font.Bold = True
+
+    Dim row As Long: row = topRow + 2
+    For a = LBound(keys) To UBound(keys)
+        Dim cr As Long, rs As Long
+        If createdBy.Exists(keys(a)) Then cr = CLng(createdBy(keys(a))) Else cr = 0
+        If resolvedBy.Exists(keys(a)) Then rs = CLng(resolvedBy(keys(a))) Else rs = 0
+        ws.Cells(row, 1).Value = CStr(keys(a))
+        ws.Cells(row, 2).Value = cr
+        ws.Cells(row, 3).Value = rs
+        row = row + 1
+    Next a
+
+    ' Chart
+    Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
+    Dim ch As ChartObject
+    Set ch = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(topRow, 1).Top, Width:=520, Height:=260)
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartTitle.Text = "Bugs per Quarter (Created vs Resolved)"
+
+    Dim basis As String: basis = GetBugCountBasis()
+    If StrComp(basis, "Created", vbTextCompare) = 0 Or StrComp(basis, "Both", vbTextCompare) = 0 Then
+        With ch.Chart.SeriesCollection.NewSeries
+            .Name = "Created"
+            .XValues = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+            .Values = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + 1), ws.Cells(lastRow, hdr.Column + 1))
+            .ChartType = xlColumnClustered
+        End With
+    End If
+    If StrComp(basis, "Resolved", vbTextCompare) = 0 Or StrComp(basis, "Both", vbTextCompare) = 0 Then
+        With ch.Chart.SeriesCollection.NewSeries
+            .Name = "Resolved"
+            .XValues = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+            .Values = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + 2), ws.Cells(lastRow, hdr.Column + 2))
+            .ChartType = xlColumnClustered
+        End With
+    End If
+
+    Jira_WriteBugMetrics_Quarter = row
+    Exit Function
+Fail:
+    Jira_WriteBugMetrics_Quarter = topRow
+End Function
 
 Public Sub Jira_NormalizeIssues_FromSample()
     Jira_NormalizeIssues "Jira_Issues_Sample", "tblJiraIssuesSample"
@@ -3473,6 +3733,8 @@ Public Sub RefreshSamples()
     LogStart "RefreshSamples"
     ' Only keep Raw_Data; remove legacy sample tabs
     RemoveLegacySampleSheets
+    ' Force-regenerate Raw_Data so headers reflect latest sample schema
+    RemoveSheetIfExists "Raw_Data"
     EnsureRawDataSheet
     LogOk "RefreshSamples"
     If IsVerbose() Then MsgBox "Sample sheets regenerated.", vbInformation
