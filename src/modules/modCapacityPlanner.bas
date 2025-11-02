@@ -1183,7 +1183,7 @@ Private Sub Flow_WriteWIPAging_Data(ByVal lo As ListObject, ByVal ws As Workshee
     Dim idxKey As Long
     idxKey = Flow_Col(lo, Array("issue key","key","issuekey"))
     If writeDebug Then
-        ws.Cells(topRow, dbgCol).Value = "WIP Aging â€“ Data"
+        ws.Cells(topRow, dbgCol).Value = "WIP Aging - Data"
         ws.Cells(topRow, dbgCol).Font.Bold = True
         ws.Cells(topRow + 1, dbgCol).Resize(1, 5).Value = Array("IssueKey","Stage","AgeDays","Created","Resolved")
         ws.Cells(topRow + 1, dbgCol).Resize(1, 5).Font.Bold = True
@@ -2415,7 +2415,7 @@ End Sub
 Private Sub EnsureDashboard()
     Dim ws As Worksheet: Set ws = EnsureSheet("Dashboard")
     ' simple labels
-    ws.Range("A1").Value = "Capacity Tracker â€“ Dashboard"
+    ws.Range("A1").Value = "Capacity Tracker - Dashboard"
     ws.Range("A2").Value = "Team:"
     ws.Range("B2").Formula = "=ActiveTeam"
     ws.Range("A4").Value = "Actions"
@@ -3369,9 +3369,9 @@ Private Sub Jira_CreatePivotsAndCharts()
     ws.Cells(cycStart + 6, 1).Value = "Bottlenecks"
     ws.Cells(cycStart + 6, 1).Font.Bold = True
     Insights_FormatSectionHeader ws, cycStart + 6, 1, 2
-    ws.Cells(cycStart + 7, 1).Value = "Avg To Do â†’ In Progress (days)"
+    ws.Cells(cycStart + 7, 1).Value = "Avg To Do -> In Progress (days)"
     ws.Cells(cycStart + 7, 2).Value = IIf(avgWait > 0, Round(avgWait, 2), "N/A")
-    ws.Cells(cycStart + 8, 1).Value = "Avg In Progress â†’ Done (days)"
+    ws.Cells(cycStart + 8, 1).Value = "Avg In Progress -> Done (days)"
     ws.Cells(cycStart + 8, 2).Value = IIf(avgExec > 0, Round(avgExec, 2), "N/A")
     ' Frame the bottlenecks rows
     Insights_FramePanel ws, cycStart + 7, 1, cycStart + 8, 2
@@ -3644,8 +3644,9 @@ Private Function Jira_WriteBugMetrics_Sprint(ByVal lo As ListObject, ByVal ws As
     Next a
 
     ' Write table header
-    ws.Cells(topRow, 1).Value = "Bug Metrics â€“ Sprint"
+    ws.Cells(topRow, 1).Value = "Bug Metrics - Sprint"
     ws.Cells(topRow, 1).Font.Bold = True
+    Insights_FormatSectionHeader ws, topRow, 1, 4
     ws.Cells(topRow + 1, 1).Resize(1, 4).Value = Array("Sprint", "BugsCreated", "BugsResolved", "BugBacklogAfter")
     ws.Cells(topRow + 1, 1).Resize(1, 4).Font.Bold = True
 
@@ -3667,6 +3668,10 @@ Private Function Jira_WriteBugMetrics_Sprint(ByVal lo As ListObject, ByVal ws As
     ' Build chart
     Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
     Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
+    ' Format the data block as a compact table
+    Insights_FormatAsTable ws, hdr, lastRow, hdr.Column + 3, _
+        "tblBugSprint", "TableStyleLight9"
+    ws.Range(ws.Cells(hdr.Row, hdr.Column), ws.Cells(lastRow, hdr.Column + 3)).Columns.AutoFit
     Dim ch As ChartObject
     Set ch = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(topRow, 1).Top, Width:=520, Height:=280)
     ch.Chart.HasTitle = True
@@ -3758,8 +3763,9 @@ Private Function Jira_WriteBugMetrics_Quarter(ByVal lo As ListObject, ByVal ws A
     Next a
 
     ' Write table
-    ws.Cells(topRow, 1).Value = "Bug Metrics â€“ Quarter"
+    ws.Cells(topRow, 1).Value = "Bug Metrics - Quarter"
     ws.Cells(topRow, 1).Font.Bold = True
+    Insights_FormatSectionHeader ws, topRow, 1, 3
     ws.Cells(topRow + 1, 1).Resize(1, 3).Value = Array("Quarter", "BugsCreated", "BugsResolved")
     ws.Cells(topRow + 1, 1).Resize(1, 3).Font.Bold = True
 
@@ -3777,6 +3783,9 @@ Private Function Jira_WriteBugMetrics_Quarter(ByVal lo As ListObject, ByVal ws A
     ' Chart
     Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
     Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
+    Insights_FormatAsTable ws, hdr, lastRow, hdr.Column + 2, _
+        "tblBugQuarter", "TableStyleLight9"
+    ws.Range(ws.Cells(hdr.Row, hdr.Column), ws.Cells(lastRow, hdr.Column + 2)).Columns.AutoFit
     Dim ch As ChartObject
     Set ch = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(topRow, 1).Top, Width:=520, Height:=260)
     ch.Chart.HasTitle = True
@@ -3893,14 +3902,12 @@ Public Sub SanitizeRawAndBuildInsights()
         If Not mHdr Is Nothing Then
             LogDbg "Sanitize_AlsoJira", "Detected Jira-like headers; building Insights too"
             Jira_NormalizeIssues ws.Name, srcTable
-            Jira_CreatePivotsAndCharts
+            Jira_CreatePivotsAndCharts ' this already appends Flow charts based on Jira_Facts
         Else
-            ' Ensure Jira_Insights exists for consolidated Flow Metrics
-            Call EnsureSheet("Jira_Insights")
+            ' Not Jira-like, append Flow charts from the selected WIP-like table
+            Dim wsJI As Worksheet: Set wsJI = EnsureSheet("Jira_Insights")
+            Flow_AppendChartsToSheet loSrc, wsJI
         End If
-        ' Append Flow Metrics into Jira_Insights
-        Dim wsJI As Worksheet: Set wsJI = EnsureSheet("Jira_Insights")
-        Flow_AppendChartsToSheet loSrc, wsJI
     Else
         ' Normalize and build insights from selected sheet/table (Flow Metrics appended inside)
         Jira_NormalizeIssues ws.Name, srcTable
