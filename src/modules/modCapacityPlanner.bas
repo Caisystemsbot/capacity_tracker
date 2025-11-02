@@ -2434,9 +2434,11 @@ Private Sub EnsureDashboard()
         Next shp
     Next nm
 
-    ' Button: Create/Advance Availability
+    ' Button: Create/Advance Availability (defensive: ignore if not available)
     Dim btn2 As Button
+    On Error Resume Next
     Set btn2 = ws.Buttons.Add(Left:=20, Top:=80, Width:=240, Height:=28)
+    On Error GoTo 0
     On Error Resume Next
     btn2.Name = UniqueShapeName(ws, "btnAdvanceAvailability")
     On Error GoTo 0
@@ -2454,7 +2456,9 @@ Private Sub EnsureDashboard()
 
     ' Button: Sanitize Raw + Build Insights
     Dim btn4 As Button
+    On Error Resume Next
     Set btn4 = ws.Buttons.Add(Left:=20, Top:=120, Width:=240, Height:=28)
+    On Error GoTo 0
     On Error Resume Next
     btn4.Name = UniqueShapeName(ws, "btnSanitizeRawAndBuild")
     On Error GoTo 0
@@ -2470,7 +2474,9 @@ Private Sub EnsureDashboard()
 
     ' Button: Refresh Samples
     Dim btn5 As Button
+    On Error Resume Next
     Set btn5 = ws.Buttons.Add(Left:=20, Top:=200, Width:=240, Height:=28)
+    On Error GoTo 0
     On Error Resume Next
     btn5.Name = UniqueShapeName(ws, "btnRefreshSamples")
     On Error GoTo 0
@@ -4853,9 +4859,11 @@ Private Sub EnsureMetricsSheet()
     ws.Columns("H").ColumnWidth = 24
 
     ' Freeze header row
+    On Error Resume Next
     With ws
         .Activate
         .Range("A2").Select
         ActiveWindow.FreezePanes = True
     End With
+    On Error GoTo 0
 End Sub
