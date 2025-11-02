@@ -1,4 +1,4 @@
-Option Explicit
+﻿Option Explicit
 
 ' Compile-time feature flags
 #Const FLOW_OVERLAY_SHAPES = 0 ' Set to 1 to draw WIP backdrop/labels as shapes
@@ -1183,7 +1183,7 @@ Private Sub Flow_WriteWIPAging_Data(ByVal lo As ListObject, ByVal ws As Workshee
     Dim idxKey As Long
     idxKey = Flow_Col(lo, Array("issue key","key","issuekey"))
     If writeDebug Then
-        ws.Cells(topRow, dbgCol).Value = "WIP Aging – Data"
+        ws.Cells(topRow, dbgCol).Value = "WIP Aging â€“ Data"
         ws.Cells(topRow, dbgCol).Font.Bold = True
         ws.Cells(topRow + 1, dbgCol).Resize(1, 5).Value = Array("IssueKey","Stage","AgeDays","Created","Resolved")
         ws.Cells(topRow + 1, dbgCol).Resize(1, 5).Font.Bold = True
@@ -1308,7 +1308,7 @@ Private Sub Flow_MakeWIPAging_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
     Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column + 1).End(xlUp).Row
     If lastRow <= hdr.Row + 1 Then Exit Sub
 
-    ' Build 4 series by filtering rows based on X (1±jitter, 2±jitter, ...)
+    ' Build 4 series by filtering rows based on X (1Â±jitter, 2Â±jitter, ...)
     Dim ch As ChartObject
     Set ch = ws.ChartObjects.Add(Left:=20, Top:=ws.Cells(topRow + 1, 1).Top, Width:=560, Height:=320)
     ch.Chart.ChartType = xlXYScatter
@@ -2415,7 +2415,7 @@ End Sub
 Private Sub EnsureDashboard()
     Dim ws As Worksheet: Set ws = EnsureSheet("Dashboard")
     ' simple labels
-    ws.Range("A1").Value = "Capacity Tracker – Dashboard"
+    ws.Range("A1").Value = "Capacity Tracker â€“ Dashboard"
     ws.Range("A2").Value = "Team:"
     ws.Range("B2").Formula = "=ActiveTeam"
     ws.Range("A4").Value = "Actions"
@@ -2542,7 +2542,7 @@ Public Sub CreateOrAdvanceAvailability()
     LogStart "CreateOrAdvanceAvailability"
     Dim last As Worksheet: Set last = FindLatestAvailability()
     If last Is Nothing Then
-        ' none exists → prompt
+        ' none exists â†’ prompt
         CreateTeamAvailability
         Exit Sub
     End If
@@ -3276,6 +3276,9 @@ Private Sub Jira_CreatePivotsAndCharts()
     ' Chart for Avg Days by Story Points
     Dim lastRowStats As Long
     lastRowStats = ws.Cells(ws.Rows.Count, startStats.Column).End(xlUp).Row
+    ' Style the stats block as an Excel table for readability
+    Insights_FormatAsTable ws, ws.Cells(startStats.Row, 1), lastRowStats, startStats.Column + 3, _
+        "tblInsights_SPStats", "TableStyleMedium9"
     Dim ch0 As ChartObject
     Set ch0 = ws.ChartObjects.Add(Left:=400, Top:=ws.Range("A3").Top, Width:=420, Height:=260)
     ch0.Chart.ChartType = xlColumnClustered
@@ -3319,6 +3322,7 @@ Private Sub Jira_CreatePivotsAndCharts()
     Dim cycStart As Long: cycStart = lastRowStats + 2
     ws.Cells(cycStart, 1).Value = "Cycle Time (days)"
     ws.Cells(cycStart, 1).Font.Bold = True
+    Insights_FormatSectionHeader ws, cycStart, 1, 2
     ws.Cells(cycStart + 1, 1).Value = "Mean"
     ws.Cells(cycStart + 1, 2).Value = Round(meanCT, 2)
     ws.Cells(cycStart + 2, 1).Value = "Median"
@@ -3327,21 +3331,26 @@ Private Sub Jira_CreatePivotsAndCharts()
     ws.Cells(cycStart + 3, 2).Value = Round(sdCT, 2)
     ws.Cells(cycStart + 4, 1).Value = "Outliers (> mean + 2*stdev)"
     ws.Cells(cycStart + 4, 2).Value = outCT
+    Insights_FramePanel ws, cycStart + 1, 1, cycStart + 4, 2
 
     ' Bottleneck Detection (calendar days)
     Dim avgWait As Double, avgExec As Double
     Call ComputeBottlenecks(lo, avgWait, avgExec)
     ws.Cells(cycStart + 6, 1).Value = "Bottlenecks"
     ws.Cells(cycStart + 6, 1).Font.Bold = True
-    ws.Cells(cycStart + 7, 1).Value = "Avg To Do → In Progress (days)"
+    Insights_FormatSectionHeader ws, cycStart + 6, 1, 2
+    ws.Cells(cycStart + 7, 1).Value = "Avg To Do â†’ In Progress (days)"
     ws.Cells(cycStart + 7, 2).Value = IIf(avgWait > 0, Round(avgWait, 2), "N/A")
-    ws.Cells(cycStart + 8, 1).Value = "Avg In Progress → Done (days)"
+    ws.Cells(cycStart + 8, 1).Value = "Avg In Progress â†’ Done (days)"
     ws.Cells(cycStart + 8, 2).Value = IIf(avgExec > 0, Round(avgExec, 2), "N/A")
+    ' Frame the bottlenecks rows
+    Insights_FramePanel ws, cycStart + 7, 1, cycStart + 8, 2
 
     ' Summary replacement: Average Cycle Time by Story Points (1,2,3,5,8,13)
     Dim thr As Range: Set thr = startStats.Offset(0, 6) ' move further right to avoid overlap
     thr.Value = "Cycle Time by Story Points"
     thr.Font.Bold = True
+    Insights_FormatSectionHeader ws, thr.Row, thr.Column, thr.Column + 1
     thr.Offset(1, 0).Value = "Story Points"
     thr.Offset(1, 1).Value = "Avg Days"
     thr.Offset(1, 0).Resize(1, 2).Font.Bold = True
@@ -3371,6 +3380,9 @@ Private Sub Jira_CreatePivotsAndCharts()
                 Next j
             End If
         Next i2
+        ' Style the 2-column summary as a compact table
+        Insights_FormatAsTable ws, ws.Cells(thr.Row + 1, thr.Column), row2 - 1, thr.Column + 1, _
+            "tblInsights_SPAvg", "TableStyleLight9"
         Dim row2 As Long: row2 = thr.Row + 2
         For i2 = LBound(cats) To UBound(cats)
             ws.Cells(row2, thr.Column).Value = cats(i2)
@@ -3451,6 +3463,43 @@ Private Sub Jira_CreatePivotsAndCharts()
     topBM = Jira_WriteBugMetrics_Quarter(lo, ws, topBM + 2)
     Flow_AppendChartsToSheet lo, ws
     On Error GoTo 0
+End Sub
+
+' -------------------- Insights Formatting helpers --------------------
+
+Private Sub Insights_FormatAsTable(ByVal ws As Worksheet, ByVal topLeft As Range, ByVal lastRow As Long, ByVal lastCol As Long, ByVal nameBase As String, ByVal styleName As String)
+    On Error GoTo Fail
+    Dim rng As Range
+    Set rng = ws.Range(topLeft, ws.Cells(lastRow, lastCol))
+    Dim lo As ListObject
+    Set lo = ws.ListObjects.Add(xlSrcRange, rng, , xlYes)
+    On Error Resume Next
+    lo.Name = nameBase
+    If Err.Number <> 0 Then
+        Err.Clear
+        lo.Name = UniqueTableName(ws.Parent, nameBase)
+    End If
+    On Error GoTo 0
+    On Error Resume Next
+    lo.TableStyle = styleName
+    On Error GoTo 0
+    Exit Sub
+Fail:
+End Sub
+
+Private Sub Insights_FormatSectionHeader(ByVal ws As Worksheet, ByVal row As Long, ByVal colFirst As Long, ByVal colLast As Long)
+    With ws.Range(ws.Cells(row, colFirst), ws.Cells(row, colLast))
+        .Font.Bold = True
+        .Interior.Color = RGB(221, 235, 247)
+        .Borders.Weight = 2
+    End With
+End Sub
+
+Private Sub Insights_FramePanel(ByVal ws As Worksheet, ByVal r1 As Long, ByVal c1 As Long, ByVal r2 As Long, ByVal c2 As Long)
+    With ws.Range(ws.Cells(r1, c1), ws.Cells(r2, c2))
+        .Borders.Weight = 2
+        .Interior.Color = RGB(242, 242, 242)
+    End With
 End Sub
 
 Private Sub WritePerPointTimeStats(ByVal lo As ListObject, ByVal dest As Range)
@@ -3563,7 +3612,7 @@ Private Function Jira_WriteBugMetrics_Sprint(ByVal lo As ListObject, ByVal ws As
     Next a
 
     ' Write table header
-    ws.Cells(topRow, 1).Value = "Bug Metrics – Sprint"
+    ws.Cells(topRow, 1).Value = "Bug Metrics â€“ Sprint"
     ws.Cells(topRow, 1).Font.Bold = True
     ws.Cells(topRow + 1, 1).Resize(1, 4).Value = Array("Sprint", "BugsCreated", "BugsResolved", "BugBacklogAfter")
     ws.Cells(topRow + 1, 1).Resize(1, 4).Font.Bold = True
@@ -3677,7 +3726,7 @@ Private Function Jira_WriteBugMetrics_Quarter(ByVal lo As ListObject, ByVal ws A
     Next a
 
     ' Write table
-    ws.Cells(topRow, 1).Value = "Bug Metrics – Quarter"
+    ws.Cells(topRow, 1).Value = "Bug Metrics â€“ Quarter"
     ws.Cells(topRow, 1).Font.Bold = True
     ws.Cells(topRow + 1, 1).Resize(1, 3).Value = Array("Quarter", "BugsCreated", "BugsResolved")
     ws.Cells(topRow + 1, 1).Resize(1, 3).Font.Bold = True
@@ -4075,7 +4124,7 @@ Private Sub EnsureRawDataSheet()
         Dim created As Date: created = base + ((i - 1) * 2 Mod 70) + TimeSerial((i * 2) Mod 24, (i * 7) Mod 60, 0)
         Dim sp As Variant: sp = spPool(i - 1)
 
-        ' Time-in-status (days) — more realistic distribution to produce a wider CT range
+        ' Time-in-status (days) â€” more realistic distribution to produce a wider CT range
         Dim tTodo As Double, tProg As Double, tTest As Double, tRev As Double
         Dim baseDays As Double
         baseDays = sp * 2 + ((i Mod 5) - 2) ' +/- 2 days variability
@@ -4631,7 +4680,7 @@ Private Sub MetricsApplyJiraForSprint(ByVal sStart As Date, ByVal sEnd As Date, 
     End If
 End Sub
 
-"" ' token-based HTTP removed; using Power Query From Web instead
+' token-based HTTP removed; using Power Query From Web instead
 
 Private Sub JiraParseSprints(ByVal json As String, ByRef ids() As Long, ByRef starts() As Date, ByRef ends() As Date, ByRef outCount As Long)
     ' Lightweight parser for /board/{id}/sprint listing (assumes fields id/startDate/endDate)
@@ -4735,7 +4784,7 @@ End Function
 
 Private Sub EnsureMetricsSheet()
     Dim ws As Worksheet: Set ws = EnsureSheet("Metrics")
-    ' If table already exists, assume user has content and formatting—do not rebuild
+    ' If table already exists, assume user has content and formattingâ€”do not rebuild
     If HasTable(ws, "tblMetrics") Then Exit Sub
 
     ws.Cells.Clear
