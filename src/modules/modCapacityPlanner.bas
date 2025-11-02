@@ -1721,7 +1721,10 @@ Private Function Flow_WriteSprintSpan_Data(ByVal lo As ListObject, ByVal ws As W
     idxResolved = Flow_GetColIndex(lo, "Resolved")
     idxSpan = lo.ListColumns("SprintSpan").Index
     On Error GoTo 0
-    If (idxCreated = 0 And idxStart = 0) Or idxResolved = 0 Then Exit Function
+    ' Optional: detect Sprint column name to derive span directly when dates are insufficient
+    Dim idxSprintCol As Long
+    idxSprintCol = Flow_Col(lo, Array("sprint","sprints","sprint name"))
+    If ((idxCreated = 0 And idxStart = 0) Or idxResolved = 0) And idxSprintCol = 0 Then Exit Function
 
     Dim row As Long: row = topRow
     ws.Cells(row, 1).Value = "Sprint Spans (>1 sprint)"
@@ -1733,37 +1736,54 @@ Private Function Flow_WriteSprintSpan_Data(ByVal lo As ListObject, ByVal ws As W
 
     Dim i As Long
     For i = 1 To lo.ListRows.Count
-        Dim dCreated As Variant, dStart As Variant, dResolved As Variant
-        dCreated = lo.DataBodyRange.Cells(i, idxCreated).Value
-        If idxStart > 0 Then dStart = lo.DataBodyRange.Cells(i, idxStart).Value Else dStart = Empty
-        dResolved = lo.DataBodyRange.Cells(i, idxResolved).Value
-        If Not IsDate(dResolved) Then GoTo NextI
-        Dim sd As Date
-        If IsDate(dStart) Then
-            sd = CDate(dStart)
-        ElseIf IsDate(dCreated) Then
-            sd = CDate(dCreated)
+        Dim span As Long, startNum As Integer
+        Dim usedSprintParse As Boolean: usedSprintParse = False
+        If idxSprintCol > 0 Then
+            Dim sRaw As String: sRaw = CStr(lo.DataBodyRange.Cells(i, idxSprintCol).Value)
+            If Len(Trim$(sRaw)) > 0 Then
+                Dim parts As Variant: parts = Split(sRaw, ",")
+                Dim earliest As String: earliest = Trim$(parts(UBound(parts)))
+                Dim yE As Integer, qE As Integer, sE As Integer
+                If ParseSprintTagByPattern(earliest, yE, qE, sE) Then
+                    startNum = sE
+                    ' Span by unique sprint labels present (best-effort)
+                    Dim seen As Object: Set seen = CreateObject("Scripting.Dictionary")
+                    Dim j As Long
+                    For j = LBound(parts) To UBound(parts)
+                        Dim nm As String: nm = Trim$(CStr(parts(j)))
+                        If Len(nm) > 0 Then If Not seen.Exists(nm) Then seen(nm) = True
+                    Next j
+                    span = Application.WorksheetFunction.Max(1, seen.Count)
+                    usedSprintParse = True
+                End If
+            End If
         End If
-        If sd = 0 Then GoTo NextI
 
-        ' Compute span (prefer SprintSpan if present)
-        Dim span As Long
-        If idxSpan > 0 Then
-            span = CLng(Application.WorksheetFunction.Max(1, Val(lo.DataBodyRange.Cells(i, idxSpan).Value)))
-        Else
-            Dim sprintLen As Long: sprintLen = CLng(Val(GetNameValueOr("SprintLengthDays", "10")))
-            Dim wd As Long: wd = WorkdaysBetween(sd, CDate(dResolved))
-            span = Application.WorksheetFunction.RoundUp(wd / sprintLen, 0)
+        If Not usedSprintParse Then
+            Dim dCreated As Variant, dStart As Variant, dResolved As Variant
+            dCreated = IIf(idxCreated > 0, lo.DataBodyRange.Cells(i, idxCreated).Value, Empty)
+            dStart = IIf(idxStart > 0, lo.DataBodyRange.Cells(i, idxStart).Value, Empty)
+            dResolved = IIf(idxResolved > 0, lo.DataBodyRange.Cells(i, idxResolved).Value, Empty)
+            If Not IsDate(dResolved) Then GoTo NextI
+            Dim sd As Date
+            If IsDate(dStart) Then sd = CDate(dStart) ElseIf IsDate(dCreated) Then sd = CDate(dCreated)
+            If sd = 0 Then GoTo NextI
+            If idxSpan > 0 Then
+                span = CLng(Application.WorksheetFunction.Max(1, Val(lo.DataBodyRange.Cells(i, idxSpan).Value)))
+            Else
+                Dim sprintLen As Long: sprintLen = CLng(Val(GetNameValueOr("SprintLengthDays", "10")))
+                Dim wd As Long: wd = WorkdaysBetween(sd, CDate(dResolved))
+                span = Application.WorksheetFunction.RoundUp(wd / sprintLen, 0)
+            End If
+            Dim yr As Integer: yr = Year(sd)
+            Dim q As Integer: q = Int((Month(sd) - 1) / 3) + 1
+            Dim qStart As Date: qStart = QuarterStartDate(yr, q)
+            startNum = Int((sd - qStart) / 14) + 1
+            If startNum < 1 Then startNum = 1
+            If startNum > QuarterSprints(q) Then startNum = QuarterSprints(q)
         End If
+
         If span <= 1 Then GoTo NextI
-
-        ' Determine Start sprint number within quarter of start date
-        Dim yr As Integer: yr = Year(sd)
-        Dim q As Integer: q = Int((Month(sd) - 1) / 3) + 1
-        Dim qStart As Date: qStart = QuarterStartDate(yr, q)
-        Dim startNum As Integer: startNum = Int((sd - qStart) / 14) + 1
-        If startNum < 1 Then startNum = 1
-        If startNum > QuarterSprints(q) Then startNum = QuarterSprints(q)
 
         If idxKey > 0 Then ws.Cells(row, 1).Value = CStr(lo.DataBodyRange.Cells(i, idxKey).Value) Else ws.Cells(row, 1).Value = "Item " & i
         ws.Cells(row, 2).Value = startNum
@@ -1943,6 +1963,9 @@ Private Sub SeedNamedValues()
     ' Bug metrics (optional)
     EnsureNamedValue "BugCountBasis", ws.Range("H11"), "Both"  ' One of: Both/Created/Resolved
     EnsureNamedValue "BugIssueTypes", ws.Range("H12"), "Bug,Defect"
+    ' Sprint parsing (optional): pattern and 2-digit year base
+    EnsureNamedValue "SprintParsePattern", ws.Range("H13"), GetNameValueOr("SprintNamePattern", "{YYYY} Q{Q} S{S}")
+    EnsureNamedValue "SprintYearBase", ws.Range("H14"), 2000
     WriteSettingsLabels ws
     WriteGettingStarted
     EnsureDashboard
@@ -2080,6 +2103,8 @@ Private Sub WriteSettingsLabels(ByVal ws As Worksheet)
     ws.Range("G10").Value = "SprintNamePattern (tokens {YYYY},{YY},{Q},{S},{TEAM})"
     ws.Range("G11").Value = "BugCountBasis (Both/Created/Resolved)"
     ws.Range("G12").Value = "BugIssueTypes (comma list)"
+    ws.Range("G13").Value = "SprintParsePattern (e.g., {TEAM} {YY}.{Q}.{S})"
+    ws.Range("G14").Value = "SprintYearBase (base for {YY}, e.g., 2000)"
     ws.Columns("G:H").AutoFit
 End Sub
 
@@ -2833,6 +2858,99 @@ Private Function FormatQuarterTagFromDate(ByVal d As Date) As String
     Dim yr As Integer: yr = Year(d)
     Dim q As Integer: q = Int((Month(d) - 1) / 3) + 1
     FormatQuarterTagFromDate = CStr(yr) & " Q" & CStr(q)
+End Function
+
+' -------------------- Sprint tag parsing (pattern-based) --------------------
+
+Private Function ParseSprintTagByPattern(ByVal s As String, ByRef outYr As Integer, ByRef outQ As Integer, ByRef outS As Integer) As Boolean
+    On Error GoTo Fail
+    Dim pat As String
+    pat = GetNameValueOr("SprintParsePattern", GetNameValueOr("SprintNamePattern", "{YYYY} Q{Q} S{S}"))
+
+    Dim re As Object: Set re = CreateObject("VBScript.RegExp")
+    re.Global = False
+    re.IgnoreCase = True
+
+    Dim rePat As String: rePat = ""
+    Dim i As Long: i = 1
+    Dim group As Integer: group = 0
+    Dim idxY As Integer: idxY = 0
+    Dim idxQ As Integer: idxQ = 0
+    Dim idxS As Integer: idxS = 0
+
+    Do While i <= Len(pat)
+        Dim ch As String: ch = Mid$(pat, i, 1)
+        If ch = "{" Then
+            Dim j As Long: j = InStr(i, pat, "}")
+            If j = 0 Then Exit Do
+            Dim tok As String: tok = Mid$(pat, i + 1, j - i - 1)
+            Select Case UCase$(tok)
+                Case "YYYY"
+                    group = group + 1: idxY = group
+                    rePat = rePat & "(\d{4})"
+                Case "YY"
+                    group = group + 1: idxY = group
+                    rePat = rePat & "(\d{2})"
+                Case "Q"
+                    group = group + 1: idxQ = group
+                    rePat = rePat & "(\d{1,2})"
+                Case "S"
+                    group = group + 1: idxS = group
+                    rePat = rePat & "(\d{1,2})"
+                Case "TEAM"
+                    ' non-greedy team segment
+                    rePat = rePat & "(.*?)"
+                Case Else
+                    ' unknown token: treat literally
+                    rePat = rePat & RegEscape("{" & tok & "}")
+            End Select
+            i = j + 1
+        Else
+            If ch = " " Then
+                rePat = rePat & "\\s+"
+            Else
+                rePat = rePat & RegEscape(ch)
+            End If
+            i = i + 1
+        End If
+    Loop
+    If Len(rePat) = 0 Then Exit Function
+    re.Pattern = "^" & rePat & "$"
+
+    Dim m As Object
+    Set m = re.Execute(Trim$(s))
+    If m.Count = 0 Then Exit Function
+    Dim sm As Object: Set sm = m(0)
+    Dim yearVal As Long, qVal As Long, sVal As Long
+    If idxY > 0 Then
+        yearVal = CLng(Val(sm.SubMatches(idxY - 1)))
+        If Len(CStr(yearVal)) <= 2 Then
+            Dim base As Long: base = CLng(Val(GetNameValueOr("SprintYearBase", "2000")))
+            yearVal = base + yearVal
+        End If
+    End If
+    If idxQ > 0 Then qVal = CLng(Val(sm.SubMatches(idxQ - 1)))
+    If idxS > 0 Then sVal = CLng(Val(sm.SubMatches(idxS - 1)))
+    If yearVal <= 0 Or qVal <= 0 Or sVal <= 0 Then Exit Function
+    outYr = CInt(yearVal): outQ = CInt(qVal): outS = CInt(sVal)
+    ParseSprintTagByPattern = True
+    Exit Function
+Fail:
+    ParseSprintTagByPattern = False
+End Function
+
+Private Function RegEscape(ByVal t As String) As String
+    Dim i As Long, ch As String, out As String
+    For i = 1 To Len(t)
+        ch = Mid$(t, i, 1)
+        Select Case ch
+            Case ".","+","*","?","^","$","(",")","[","]","{","}","|","\\"
+                out = out & "\" & ch
+            Case Else
+                out = out & ch
+        End Select
+    Next i
+    RegEscape = out
 End Function
 
 Private Function PromptForDate(ByVal prompt As String) As Date
@@ -4080,6 +4198,8 @@ Private Function Jira_BuildHeaderMap(ByVal lo As ListObject) As Object
     Call MapCol(idx, names, "StoryPoints", Array("story points","story point","story point estimate","custom field (story points)"))
     Call MapCol(idx, names, "FixVersion", Array("fix version/s","fix version"))
     Call MapCol(idx, names, "StartProgress", Array("start progress","started","in progress","in progress date","start date"))
+    ' Optional Sprint column (name pattern varies per team)
+    Call MapCol(idx, names, "Sprint", Array("sprint","sprints","sprint name"))
     If idx.Count = 0 Then Set idx = Nothing
     Set Jira_BuildHeaderMap = idx
 End Function
