@@ -20,6 +20,7 @@ Private Const xlColumnField As Long = 2
 Private Const xlDataField As Long = 4
 Private Const xlSum As Long = -4157
 Private Const xlCount As Long = -4112
+Private Const xlTabularRow As Long = 1
 Private Const xlColumnClustered As Long = 51
 Private Const xlAreaStacked As Long = 76
 Private Const xlXYScatter As Long = -4169
@@ -3229,9 +3230,29 @@ Private Sub Jira_CreatePivotsAndCharts()
     Set pt2 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:=UniquePivotName(ws, "ptSPDist"))
     With pt2
         On Error Resume Next
+        ' Layout so the row header shows the field name instead of "Row Labels"
+        .RowAxisLayout xlTabularRow
+        ' Row field
         .PivotFields("StoryPoints").Orientation = xlRowField
+        ' Hide 0 and any non-canonical SP buckets; keep 1,2,3,5,8,13
+        Dim pfSP As PivotField, pi As PivotItem, keep As String
+        Set pfSP = .PivotFields("StoryPoints")
+        pfSP.ClearAllFilters
+        keep = ",1,2,3,5,8,13,"
+        For Each pi In pfSP.PivotItems
+            Dim spv As Long: spv = CLng(Val(CStr(pi.Name)))
+            If InStr(1, keep, "," & CStr(spv) & ",", vbTextCompare) = 0 Then
+                pi.Visible = False
+            Else
+                pi.Visible = True
+            End If
+        Next pi
+        ' Data field: count issues, with friendly caption
         .PivotFields("IssueKey").Orientation = xlDataField
         .PivotFields("IssueKey").Function = xlCount
+        If .DataFields.Count >= 1 Then .DataFields(1).Name = "Issue Count"
+        ' Friendly caption for row field header
+        On Error Resume Next: pfSP.Caption = "Story Points": On Error GoTo 0
         On Error GoTo 0
     End With
     Dim ch2 As ChartObject
