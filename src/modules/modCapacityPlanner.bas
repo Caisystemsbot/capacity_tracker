@@ -3047,16 +3047,17 @@ Public Sub Jira_BuildSampleIssues()
     Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Issues_Sample")
     ws.Cells.Clear
     Dim headers As Variant
-    headers = Array("Summary","Issue key","Issue id","Issue Type","Status","Created","Start Progress","Resolved","Fix Version/s","Parent","Custom field (Story Points)")
+    headers = Array("Summary","Issue key","Issue id","Issue Type","Status","Created date","Start Progress","Resolved date","Fix Version/s","Parent","Custom field (Story Points)")
     Dim i As Long
     For i = LBound(headers) To UBound(headers)
         ws.Cells(1, i + 1).Value = headers(i)
     Next i
     Dim r As Long: r = 2
-    Call W(ws, r, Array("Onboard Tools", "FIINT-4000", 330001, "Story", "Done", #9/10/2025#, #9/23/2025#, "2025.09.23", "EPIC-100", 3)): r = r + 1
-    Call W(ws, r, Array("Automation Cleanup", "FIINT-4010", 330010, "Story", "Done", #9/25/2025#, #10/7/2025#, "2025.10.07", "EPIC-100", 5)): r = r + 1
-    Call W(ws, r, Array("Improve Logs", "FIINT-4020", 330020, "Task", "In Progress", #10/8/2025#, "", "2025.10.21", "EPIC-120", 2)): r = r + 1
-    Call W(ws, r, Array("Release Steps", "FIINT-4071", 333071, "Story", "Done", #9/21/2025#, #10/15/2025#, "2025.10.15", "EPIC-140", 3)): r = r + 1
+    ' Note: Resolved is a date; Fix Version/s is the string like 2025.09.23
+    Call W(ws, r, Array("Onboard Tools", "FIINT-4000", 330001, "Story", "Done", #9/10/2025#, #9/23/2025#, #9/23/2025#, "2025.09.23", "EPIC-100", 3)): r = r + 1
+    Call W(ws, r, Array("Automation Cleanup", "FIINT-4010", 330010, "Story", "Done", #9/25/2025#, #10/7/2025#, #10/7/2025#, "2025.10.07", "EPIC-100", 5)): r = r + 1
+    Call W(ws, r, Array("Improve Logs", "FIINT-4020", 330020, "Task", "In Progress", #10/8/2025#, "", "", "EPIC-120", 2)): r = r + 1
+    Call W(ws, r, Array("Release Steps", "FIINT-4071", 333071, "Story", "Done", #9/21/2025#, #10/15/2025#, #10/15/2025#, "2025.10.15", "EPIC-140", 3)): r = r + 1
     ws.Rows(1).Font.Bold = True
     Dim lo As ListObject
     On Error Resume Next: Set lo = ws.ListObjects("tblJiraIssuesSample"): On Error GoTo 0
