@@ -30,7 +30,7 @@ Outputs:
 ## Input columns (flexible)
 The script maps common Jira headers case‑insensitively. Useful names:
 - Created, Start Progress, Resolved
-- Issue key, Summary, Issue Type, Status, Fix Version/s, Epic Link
+- Issue key, Summary, Issue Type, Status, Fix Version/s, Parent (Epic)
 - Story Points
 - Optional: Time In Todo / Progress / Testing / Review (days) – used to infer Start when missing.
 

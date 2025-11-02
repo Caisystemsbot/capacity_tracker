@@ -34,7 +34,7 @@ HeaderSynonyms: Dict[str, List[str]] = {
     "Summary": ["summary", "title"],
     "IssueType": ["issue type", "type"],
     "Status": ["status"],
-    "Epic": ["epic link", "epic"],
+    "Epic": ["parent", "parent link", "parent id", "parent key", "epic link", "epic"],
     "Created": ["created", "created date", "created on", "created_date"],
     "Resolved": ["resolved", "resolved date", "done date", "resolution date", "closed"],
     "StartProgress": ["start progress", "startprogress", "started", "in progress date", "start date"],

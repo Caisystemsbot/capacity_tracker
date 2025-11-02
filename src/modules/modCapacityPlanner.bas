@@ -3047,7 +3047,7 @@ Public Sub Jira_BuildSampleIssues()
     Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Issues_Sample")
     ws.Cells.Clear
     Dim headers As Variant
-    headers = Array("Summary","Issue key","Issue id","Issue Type","Status","Created","Start Progress","Resolved","Fix Version/s","Custom field (Epic Link)","Custom field (Story Points)")
+    headers = Array("Summary","Issue key","Issue id","Issue Type","Status","Created","Start Progress","Resolved","Fix Version/s","Parent","Custom field (Story Points)")
     Dim i As Long
     For i = LBound(headers) To UBound(headers)
         ws.Cells(1, i + 1).Value = headers(i)
@@ -3490,7 +3490,7 @@ Private Sub EnsureSampleIssuesSheet()
     End If
     ws.Cells.Clear
     Dim headers As Variant
-    headers = Array("Summary","Issue key","Issue id","Issue Type","Status","Created date","Resolved date","Fix Version/s","Custom field (Epic Link)","Custom field (Story Points)")
+    headers = Array("Summary","Issue key","Issue id","Issue Type","Status","Created date","Resolved date","Fix Version/s","Parent","Custom field (Story Points)")
     Dim i As Long
     For i = LBound(headers) To UBound(headers)
         ws.Cells(1, i + 1).Value = headers(i)
@@ -3570,7 +3570,7 @@ Private Sub EnsureRawSampleSheet()
     Dim hdrStr As String
     hdrStr = "Summary|Issue key|Issue id|Issue Type|Status|Priority|Assignee|Reporter|" & _
              "Created date|Start Progress|Resolved date|Fix Version/s|Affects Version/s|Component/s|Labels|" & _
-             "Custom field (Epic Link)|Custom field (Story Points)|Custom field (Target Date)|URL|Extra1|Extra2"
+             "Parent|Custom field (Story Points)|Custom field (Target Date)|URL|Extra1|Extra2"
     Dim headers As Variant: headers = Split(hdrStr, "|")
     Dim i As Long
     For i = LBound(headers) To UBound(headers)
@@ -3665,7 +3665,7 @@ Private Sub EnsureRawDataSheet()
           "Created date|Start Progress|Updated date|Resolved date|" & _
           "Time In Todo|Time In Progress|Time In Testing|Time In Review|" & _
           "Fix Version/s|Component/s|Labels|" & _
-          "Custom field (Epic Link)|Custom field (Story Points)|URL"
+          "Parent|Custom field (Story Points)|URL"
     Dim headers As Variant: headers = Split(hdr, "|")
 
     Dim i As Long
@@ -3810,7 +3810,8 @@ Private Function Jira_BuildHeaderMap(ByVal lo As ListObject) As Object
     Call MapCol(idx, names, "Summary", Array("summary","title"))
     Call MapCol(idx, names, "IssueType", Array("issue type","type"))
     Call MapCol(idx, names, "Status", Array("status"))
-    Call MapCol(idx, names, "Epic", Array("epic link","epic"))
+    ' Map Epic from modern and legacy exports: Parent (new) or Epic Link (classic)
+    Call MapCol(idx, names, "Epic", Array("parent","parent link","parent id","parent key","epic link","epic"))
     Call MapCol(idx, names, "Created", Array("created","created date","created on"))
     Call MapCol(idx, names, "Resolved", Array("resolved","resolved date","done date"))
     Call MapCol(idx, names, "StoryPoints", Array("story points","story point","story point estimate","custom field (story points)"))
