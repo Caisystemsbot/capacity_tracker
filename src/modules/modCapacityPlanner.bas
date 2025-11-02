@@ -1751,7 +1751,9 @@ Private Function Flow_WriteSprintSpan_Data(ByVal lo As ListObject, ByVal ws As W
                     Dim j As Long
                     For j = LBound(parts) To UBound(parts)
                         Dim nm As String: nm = Trim$(CStr(parts(j)))
-                        If Len(nm) > 0 Then If Not seen.Exists(nm) Then seen(nm) = True
+                        If Len(nm) > 0 Then
+                            If Not seen.Exists(nm) Then seen(nm) = True
+                        End If
                     Next j
                     span = Application.WorksheetFunction.Max(1, seen.Count)
                     usedSprintParse = True
@@ -1761,12 +1763,16 @@ Private Function Flow_WriteSprintSpan_Data(ByVal lo As ListObject, ByVal ws As W
 
         If Not usedSprintParse Then
             Dim dCreated As Variant, dStart As Variant, dResolved As Variant
-            dCreated = IIf(idxCreated > 0, lo.DataBodyRange.Cells(i, idxCreated).Value, Empty)
-            dStart = IIf(idxStart > 0, lo.DataBodyRange.Cells(i, idxStart).Value, Empty)
-            dResolved = IIf(idxResolved > 0, lo.DataBodyRange.Cells(i, idxResolved).Value, Empty)
+            If idxCreated > 0 Then dCreated = lo.DataBodyRange.Cells(i, idxCreated).Value Else dCreated = Empty
+            If idxStart > 0 Then dStart = lo.DataBodyRange.Cells(i, idxStart).Value Else dStart = Empty
+            If idxResolved > 0 Then dResolved = lo.DataBodyRange.Cells(i, idxResolved).Value Else dResolved = Empty
             If Not IsDate(dResolved) Then GoTo NextI
             Dim sd As Date
-            If IsDate(dStart) Then sd = CDate(dStart) ElseIf IsDate(dCreated) Then sd = CDate(dCreated)
+            If IsDate(dStart) Then
+                sd = CDate(dStart)
+            ElseIf IsDate(dCreated) Then
+                sd = CDate(dCreated)
+            End If
             If sd = 0 Then GoTo NextI
             If idxSpan > 0 Then
                 span = CLng(Application.WorksheetFunction.Max(1, Val(lo.DataBodyRange.Cells(i, idxSpan).Value)))
