@@ -3668,10 +3668,11 @@ Private Function Jira_WriteBugMetrics_Sprint(ByVal lo As ListObject, ByVal ws As
     ' Build chart
     Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
     Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
-    ' Format the data block as a compact table
+    ' Format the data block as a compact table and frame the panel
     Insights_FormatAsTable ws, hdr, lastRow, hdr.Column + 3, _
         "tblBugSprint", "TableStyleLight9"
     ws.Range(ws.Cells(hdr.Row, hdr.Column), ws.Cells(lastRow, hdr.Column + 3)).Columns.AutoFit
+    Insights_FramePanel ws, topRow, 1, lastRow, 4
     Dim ch As ChartObject
     Set ch = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(topRow, 1).Top, Width:=520, Height:=280)
     ch.Chart.HasTitle = True
@@ -3786,6 +3787,7 @@ Private Function Jira_WriteBugMetrics_Quarter(ByVal lo As ListObject, ByVal ws A
     Insights_FormatAsTable ws, hdr, lastRow, hdr.Column + 2, _
         "tblBugQuarter", "TableStyleLight9"
     ws.Range(ws.Cells(hdr.Row, hdr.Column), ws.Cells(lastRow, hdr.Column + 2)).Columns.AutoFit
+    Insights_FramePanel ws, topRow, 1, lastRow, 3
     Dim ch As ChartObject
     Set ch = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(topRow, 1).Top, Width:=520, Height:=260)
     ch.Chart.HasTitle = True
