@@ -1700,7 +1700,7 @@ Private Function Flow_WriteSprintSpan_Data(ByVal lo As ListObject, ByVal ws As W
         Dim qStart As Date: qStart = QuarterStartDate(yr, q)
         Dim startNum As Integer: startNum = Int((sd - qStart) / 14) + 1
         If startNum < 1 Then startNum = 1
-        If startNum > 7 Then startNum = 7
+        If startNum > QuarterSprints(q) Then startNum = QuarterSprints(q)
 
         If idxKey > 0 Then ws.Cells(row, 1).Value = CStr(lo.DataBodyRange.Cells(i, idxKey).Value) Else ws.Cells(row, 1).Value = "Item " & i
         ws.Cells(row, 2).Value = startNum
@@ -2446,7 +2446,7 @@ Public Sub CreateOrAdvanceAvailability()
     Dim overrideTag As String
     If ParseTagFromName(last.Name, oYr, oQ, oS) Then
         oS = oS + 1
-        If oS > 7 Then
+        If oS > QuarterSprints(oQ) Then
             oS = 1
             oQ = oQ + 1
             If oQ > 4 Then
@@ -2627,7 +2627,7 @@ Private Function FormatSprintTag(ByVal startDate As Date) As String
     Dim daysFromQ As Long: daysFromQ = CLng(startDate - qStart)
     Dim s As Integer: s = Int(daysFromQ / 14) + 1
     If s < 1 Then s = 1
-    If s > 7 Then s = 7
+    If s > QuarterSprints(q) Then s = QuarterSprints(q)
     FormatSprintTag = yr & " Q" & q & " S" & s
 End Function
 
@@ -2635,7 +2635,7 @@ Private Function FormatSprintTagYQS(ByVal yr As Integer, ByVal q As Integer, ByV
     If q < 1 Then q = 1
     If q > 4 Then q = 4
     If s < 1 Then s = 1
-    If s > 7 Then s = 7
+    If s > QuarterSprints(q) Then s = QuarterSprints(q)
     FormatSprintTagYQS = CStr(yr) & " Q" & CStr(q) & " S" & CStr(s)
 End Function
 
@@ -2649,7 +2649,7 @@ Private Function FormatSprintName(ByVal d As Date) As String
     Dim daysFromQ As Long: daysFromQ = CLng(d - qStart)
     Dim s As Integer: s = Int(daysFromQ / 14) + 1
     If s < 1 Then s = 1
-    If s > 7 Then s = 7
+    If s > QuarterSprints(q) Then s = QuarterSprints(q)
     Dim pat As String: pat = GetNameValueOr("SprintNamePattern", "{YYYY} Q{Q} S{S}")
     Dim team As String: team = GetNameValueOr("ActiveTeam", "Team")
     Dim yy As String: yy = Right$(CStr(yr), 2)
@@ -2726,6 +2726,15 @@ Private Function QuarterStartDate(ByVal yr As Integer, ByVal q As Integer) As Da
     QuarterStartDate = DateSerial(yr, (q - 1) * 3 + 1, 1)
 End Function
 
+Private Function QuarterSprints(ByVal q As Integer) As Integer
+    ' Q2 and Q4 have 7 sprints; Q1 and Q3 have 6 sprints
+    If q = 2 Or q = 4 Then
+        QuarterSprints = 7
+    Else
+        QuarterSprints = 6
+    End If
+End Function
+
 Private Function PromptForQuarterSprint(ByRef yr As Integer, ByRef q As Integer, ByRef s As Integer) As Boolean
     On Error GoTo Fail
     Dim defYr As Integer: defYr = Year(Date)
@@ -2738,10 +2747,12 @@ Private Function PromptForQuarterSprint(ByRef yr As Integer, ByRef q As Integer,
     tmp = Application.InputBox("Quarter (1-4)", "Sprint Quarter", defQ, Type:=1)
     If tmp = False Then Exit Function
     q = CInt(tmp)
-    tmp = Application.InputBox("Sprint in Quarter (1-7)", "Sprint Number", defS, Type:=1)
+    Dim maxS As Integer: maxS = QuarterSprints(q)
+    If defS > maxS Then defS = maxS
+    tmp = Application.InputBox("Sprint in Quarter (1-" & CStr(maxS) & ")", "Sprint Number", defS, Type:=1)
     If tmp = False Then Exit Function
     s = CInt(tmp)
-    If q < 1 Or q > 4 Or s < 1 Or s > 7 Then GoTo Fail
+    If q < 1 Or q > 4 Or s < 1 Or s > maxS Then GoTo Fail
     PromptForQuarterSprint = True
     Exit Function
 Fail:
@@ -4260,7 +4271,7 @@ Private Sub EnsureMetricsSheet()
 
         ' advance sprint counters
         s = s + 1
-        If s > 7 Then s = 1: q = q + 1: If q > 4 Then q = 1: yr = yr + 1
+        If s > QuarterSprints(q) Then s = 1: q = q + 1: If q > 4 Then q = 1: yr = yr + 1
         r = r + 1
     Next i
 
