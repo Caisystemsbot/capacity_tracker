@@ -381,18 +381,33 @@ Public Sub Flow_BuildCharts(Optional ByVal loSelected As ListObject)
         nextTop = Flow_NextFreeTop(ws)
         Flow_WriteWIPAging_Data lo, ws, nextTop, True, True ' include resolved, allow date-derived durations
         Flow_MakeWIPAging_Chart ws, nextTop
+        If Not Flow_WIPAging_HasData(ws, nextTop) Then
+            nextTop = Flow_NextFreeTop(ws)
+            Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
+            Flow_MakeWIPAging_Chart ws, nextTop
+        End If
     ElseIf Not hasUn Then
         ws.Cells(nextTop + 1, 1).Value = "(No unresolved items; showing historical aging at resolution)"
         On Error Resume Next: LogDbg "Flow_WIP_Mode", "historical_at_resolution": On Error GoTo 0
         nextTop = Flow_NextFreeTop(ws)
         Flow_WriteWIPAging_Data lo, ws, nextTop, True, True ' include resolved rows
         Flow_MakeWIPAging_Chart ws, nextTop
+        If Not Flow_WIPAging_HasData(ws, nextTop) Then
+            nextTop = Flow_NextFreeTop(ws)
+            Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
+            Flow_MakeWIPAging_Chart ws, nextTop
+        End If
     Else
         ' Build the chart from unresolved items
         On Error Resume Next: LogDbg "Flow_WIP_Mode", "active_wip": On Error GoTo 0
         nextTop = Flow_NextFreeTop(ws)
         Flow_WriteWIPAging_Data lo, ws, nextTop, False, True
         Flow_MakeWIPAging_Chart ws, nextTop
+        If Not Flow_WIPAging_HasData(ws, nextTop) Then
+            nextTop = Flow_NextFreeTop(ws)
+            Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
+            Flow_MakeWIPAging_Chart ws, nextTop
+        End If
     End If
 
     nextTop = Flow_NextFreeTop(ws)
@@ -473,15 +488,31 @@ Private Sub Flow_AppendChartsToSheet(ByVal lo As ListObject, ByVal ws As Workshe
         nextTop = Flow_NextFreeTop(ws)
         Flow_WriteWIPAging_Data lo, ws, nextTop, True, True ' include resolved, allow date-derived durations
         Flow_MakeWIPAging_Chart ws, nextTop
+        If Not Flow_WIPAging_HasData(ws, nextTop) Then
+            ' Fallback to a simple builder to ensure something renders
+            nextTop = Flow_NextFreeTop(ws)
+            Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
+            Flow_MakeWIPAging_Chart ws, nextTop
+        End If
     ElseIf Not hasUn Then
         ws.Cells(nextTop + 1, 1).Value = "(No unresolved items; showing historical aging at resolution)"
         nextTop = Flow_NextFreeTop(ws)
         Flow_WriteWIPAging_Data lo, ws, nextTop, True, True
         Flow_MakeWIPAging_Chart ws, nextTop
+        If Not Flow_WIPAging_HasData(ws, nextTop) Then
+            nextTop = Flow_NextFreeTop(ws)
+            Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
+            Flow_MakeWIPAging_Chart ws, nextTop
+        End If
     Else
         nextTop = Flow_NextFreeTop(ws)
         Flow_WriteWIPAging_Data lo, ws, nextTop, False, True
         Flow_MakeWIPAging_Chart ws, nextTop
+        If Not Flow_WIPAging_HasData(ws, nextTop) Then
+            nextTop = Flow_NextFreeTop(ws)
+            Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
+            Flow_MakeWIPAging_Chart ws, nextTop
+        End If
     End If
 
     ' Sprint Spans (only items crossing >1 sprint)
@@ -1444,6 +1475,58 @@ Private Sub Flow_MakeWIPAging_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
     On Error Resume Next
     Flow_LogChartSeries ch, "Flow_WIPChart_FinalSeries"
     On Error GoTo 0
+End Sub
+
+Private Function Flow_WIPAging_HasData(ByVal ws As Worksheet, ByVal topRow As Long) As Boolean
+    Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column + 1).End(xlUp).Row
+    Flow_WIPAging_HasData = (lastRow > hdr.Row + 1)
+End Function
+
+' Simple, easy-to-read writer for WIP Aging that needs only Created, StartProgress (optional), Resolved (optional).
+' Stages collapse to To Do (not started) and In Progress (started). Bugfixes/Test/Review are ignored for clarity.
+Private Sub Flow_WriteWIPAging_Data_Simple(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long)
+    Dim idxC As Long, idxS As Long, idxR As Long
+    idxC = Flow_GetColIndex(lo, "Created")
+    idxS = Flow_GetColIndex(lo, "StartProgress")
+    idxR = Flow_GetColIndex(lo, "Resolved")
+    If idxC = 0 Then Exit Sub
+
+    ws.Cells(topRow, 1).Value = "Aging Work in Progress (simple)"
+    ws.Cells(topRow, 1).Font.Bold = True
+    ws.Cells(topRow + 1, 1).Resize(1, 2).Value = Array("X", "AgeDays")
+    ws.Cells(topRow + 1, 1).Resize(1, 2).Font.Bold = True
+
+    Dim rowStart As Long: rowStart = topRow + 2
+    Dim r As Long, outR As Long: outR = rowStart
+
+    For r = 1 To lo.ListRows.Count
+        Dim c As Variant, s As Variant, rv As Variant
+        c = lo.DataBodyRange.Cells(r, idxC).Value
+        s = IIf(idxS > 0, lo.DataBodyRange.Cells(r, idxS).Value, Empty)
+        rv = IIf(idxR > 0, lo.DataBodyRange.Cells(r, idxR).Value, Empty)
+        If IsDate(c) Then
+            Dim startAt As Date
+            If IsDate(s) Then
+                startAt = CDate(s)
+            Else
+                startAt = CDate(c)
+            End If
+            Dim untilD As Date
+            If IsDate(rv) Then untilD = CDate(rv) Else untilD = Date
+            Dim age As Double: age = Application.WorksheetFunction.Max(0, DateDiff("d", startAt, untilD))
+            If age > 0 Then
+                Dim lane As Integer
+                If IsDate(s) Then lane = 2 Else lane = 1 ' 1=To Do, 2=In Progress
+                ws.Cells(outR, 1).Value = lane
+                ws.Cells(outR, 2).Value = age
+                outR = outR + 1
+            End If
+        End If
+    Next r
+
+    ' Lane caption under block
+    ws.Cells(outR + 1, 1).Value = "1 = To Do | 2 = In Progress"
 End Sub
 
 Private Sub Flow_AddWIPBandColumns(ByVal ch As ChartObject, ByVal ws As Worksheet, ByVal topRow As Long, ByVal yMax As Double, ByVal p50 As Double, ByVal p70 As Double, ByVal p85 As Double)
