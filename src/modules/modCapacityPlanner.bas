@@ -2450,7 +2450,15 @@ Private Sub EnsureDashboard()
         ws.Shapes(btn2.Name).OnAction = ao2
     End If
     On Error GoTo 0
-    btn2.Characters.Text = "Create/Advance Availability"
+    If Not btn2 Is Nothing Then
+        On Error Resume Next
+        btn2.Characters.Text = "Create/Advance Availability"
+        If Err.Number <> 0 Then
+            Err.Clear
+            ws.Shapes(btn2.Name).TextFrame.Characters.Text = "Create/Advance Availability"
+        End If
+        On Error GoTo 0
+    End If
 
     ' (Removed) Build Jira Insights button; use Sanitize Raw + Build Insights instead
 
@@ -2470,7 +2478,15 @@ Private Sub EnsureDashboard()
         ws.Shapes(btn4.Name).OnAction = ao4
     End If
     On Error GoTo 0
-    btn4.Characters.Text = "Sanitize Raw + Build Insights"
+    If Not btn4 Is Nothing Then
+        On Error Resume Next
+        btn4.Characters.Text = "Sanitize Raw + Build Insights"
+        If Err.Number <> 0 Then
+            Err.Clear
+            ws.Shapes(btn4.Name).TextFrame.Characters.Text = "Sanitize Raw + Build Insights"
+        End If
+        On Error GoTo 0
+    End If
 
     ' Button: Refresh Samples
     Dim btn5 As Button
@@ -2488,7 +2504,15 @@ Private Sub EnsureDashboard()
         ws.Shapes(btn5.Name).OnAction = ao5
     End If
     On Error GoTo 0
-    btn5.Characters.Text = "Refresh Samples"
+    If Not btn5 Is Nothing Then
+        On Error Resume Next
+        btn5.Characters.Text = "Refresh Samples"
+        If Err.Number <> 0 Then
+            Err.Clear
+            ws.Shapes(btn5.Name).TextFrame.Characters.Text = "Refresh Samples"
+        End If
+        On Error GoTo 0
+    End If
 End Sub
 
 Private Function UniqueShapeName(ByVal ws As Worksheet, ByVal base As String) As String
