@@ -444,6 +444,68 @@ Fail:
     MsgBox "Flow_BuildCharts failed: " & Err.Description, vbExclamation
 End Sub
 
+' Append Flow Metrics (WIP Aging, Sprint Spans, Throughput, Cycle Scatter)
+' to an existing sheet (e.g., Jira_Insights) without clearing it.
+Private Sub Flow_AppendChartsToSheet(ByVal lo As ListObject, ByVal ws As Worksheet)
+    On Error GoTo Fail
+    If lo Is Nothing Or ws Is Nothing Then Exit Sub
+
+    Dim nextTop As Long
+    nextTop = Flow_NextFreeTop(ws)
+
+    ' Detect time-in-status and unresolved presence
+    Dim hasTIS As Boolean, hasUn As Boolean
+    Dim idxTodo As Long, idxProg As Long, idxTest As Long, idxRev As Long
+    idxTodo = Flow_GetColIndex(lo, "TimeInTodo")
+    idxProg = Flow_GetColIndex(lo, "TimeInProgress")
+    idxTest = Flow_GetColIndex(lo, "TimeInTesting")
+    idxRev = Flow_GetColIndex(lo, "TimeInReview")
+    hasTIS = (idxTodo + idxProg + idxTest + idxRev) > 0
+    hasUn = Flow_HasUnresolved(lo)
+
+    ' WIP Aging section
+    nextTop = Flow_NextFreeTop(ws)
+    ws.Cells(nextTop, 1).Value = "WIP Aging"
+    ws.Cells(nextTop, 1).Font.Bold = True
+    If Not hasTIS Then
+        ws.Cells(nextTop + 1, 1).Value = "(No time-in-status columns found: expected Time In Todo/Progress/Testing/Review. Falling back to derive from Created/Start Progress/Resolved if available.)"
+        nextTop = Flow_NextFreeTop(ws)
+        Flow_WriteWIPAging_Data lo, ws, nextTop, True, True ' include resolved, allow date-derived durations
+        Flow_MakeWIPAging_Chart ws, nextTop
+    ElseIf Not hasUn Then
+        ws.Cells(nextTop + 1, 1).Value = "(No unresolved items; showing historical aging at resolution)"
+        nextTop = Flow_NextFreeTop(ws)
+        Flow_WriteWIPAging_Data lo, ws, nextTop, True, True
+        Flow_MakeWIPAging_Chart ws, nextTop
+    Else
+        nextTop = Flow_NextFreeTop(ws)
+        Flow_WriteWIPAging_Data lo, ws, nextTop, False, True
+        Flow_MakeWIPAging_Chart ws, nextTop
+    End If
+
+    ' Sprint Spans (only items crossing >1 sprint)
+    nextTop = Flow_NextFreeTop(ws)
+    If Flow_WriteSprintSpan_Data(lo, ws, nextTop) Then
+        Flow_MakeSprintSpan_Chart ws, nextTop
+    End If
+
+    ' Throughput
+    nextTop = Flow_NextFreeTop(ws)
+    Flow_WriteThroughput_Data lo, ws, nextTop
+    Flow_MakeThroughput_Chart ws, nextTop
+
+    ' Cycle Time scatter
+    nextTop = Flow_NextFreeTop(ws)
+    Flow_WriteCycleScatter_Data lo, ws, nextTop
+    Flow_MakeCycleScatter_Chart ws, nextTop
+
+    ws.Columns("A:Z").AutoFit
+    Exit Sub
+Fail:
+    On Error Resume Next
+    LogErr "Flow_AppendChartsToSheet", "Err " & Err.Number & ": " & Err.Description
+End Sub
+
 Private Function Flow_FindFactsTable() As ListObject
     ' Prefer a non-empty Jira_Facts!tblJiraFacts; else first table with Created and Resolved/CycleCalDays with rows
     Dim ws As Worksheet
@@ -3164,6 +3226,11 @@ Private Sub Jira_CreatePivotsAndCharts()
     End With
 
     ws.Columns("A:K").AutoFit
+
+    ' Append Flow Metrics onto Jira_Insights (consolidated view; no separate tab)
+    On Error Resume Next
+    Flow_AppendChartsToSheet lo, ws
+    On Error GoTo 0
 End Sub
 
 Private Sub WritePerPointTimeStats(ByVal lo As ListObject, ByVal dest As Range)
@@ -3301,41 +3368,26 @@ Public Sub SanitizeRawAndBuildInsights()
     On Error GoTo 0
 
     If isWip Then
-        ' Build Flow metrics from WIP-like table
-        On Error Resume Next
-        Flow_BuildCharts loSrc
-        On Error GoTo 0
-        ' If the WIP-like table also looks Jira-like, also build Jira Insights
+        ' If the WIP-like table also looks Jira-like, build Jira Insights first
         Dim mHdr As Object
         On Error Resume Next
         Set mHdr = Jira_BuildHeaderMap(loSrc)
         On Error GoTo 0
         If Not mHdr Is Nothing Then
-            On Error Resume Next
             LogDbg "Sanitize_AlsoJira", "Detected Jira-like headers; building Insights too"
             Jira_NormalizeIssues ws.Name, srcTable
             Jira_CreatePivotsAndCharts
-            On Error GoTo 0
+        Else
+            ' Ensure Jira_Insights exists for consolidated Flow Metrics
+            Call EnsureSheet("Jira_Insights")
         End If
+        ' Append Flow Metrics into Jira_Insights
+        Dim wsJI As Worksheet: Set wsJI = EnsureSheet("Jira_Insights")
+        Flow_AppendChartsToSheet loSrc, wsJI
     Else
-        ' Normalize and build insights from selected sheet/table
+        ' Normalize and build insights from selected sheet/table (Flow Metrics appended inside)
         Jira_NormalizeIssues ws.Name, srcTable
         Jira_CreatePivotsAndCharts
-        ' Also build Flow Metrics charts (CFD, Throughput, Cycle Scatter)
-        On Error Resume Next
-        Dim loFacts As ListObject
-        Dim wsFacts As Worksheet
-        Set wsFacts = Nothing
-        Set loFacts = Nothing
-        Set wsFacts = Worksheets("Jira_Facts")
-        If Not wsFacts Is Nothing Then On Error Resume Next: Set loFacts = wsFacts.ListObjects("tblJiraFacts"): On Error GoTo 0
-        If Not loFacts Is Nothing Then LogDbg "Jira_Facts", ColumnsSummary(loFacts)
-        If loFacts Is Nothing Then
-            Flow_BuildCharts ' fallback search
-        Else
-            Flow_BuildCharts loFacts
-        End If
-        On Error GoTo 0
     End If
     LogOk "SanitizeRawAndBuildInsights"
     If IsVerbose() Then MsgBox "Sanitized '" & ws.Name & "' (" & srcTable & ") and updated insights.", vbInformation
