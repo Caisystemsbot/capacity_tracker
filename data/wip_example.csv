@@ -1,0 +1,11 @@
+Issue key,Summary,Created,Resolved,Time In Todo,Time In Progress,Time In Testing,Time In Review
+WIP-1001,User login page,09/05/2025 09:10,09/08/2025 16:45,0.5,1.2,0.3,0.1
+WIP-1002,Cart bug fix,09/06/2025 10:30,09/09/2025 14:20,0.2,1.0,0.15,0.05
+WIP-1003,Refactor checkout,09/07/2025 11:05,09/12/2025 18:00,0.6,2.4,0.5,0.3
+WIP-1004,Add search autosuggest,09/08/2025 13:20,09/11/2025 15:10,0.3,1.6,0.2,0.1
+WIP-1005,Update dependencies,09/09/2025 12:15,09/10/2025 12:45,0.05,0.5,0.05,0.02
+WIP-1006,Improve logging,09/10/2025 08:40,09/13/2025 10:15,0.4,1.8,0.35,0.2
+WIP-1007,Fix flaky test,09/10/2025 15:05,09/10/2025 20:30,0.02,0.15,0.03,0.01
+WIP-1008,Optimize query,09/11/2025 09:00,09/15/2025 16:00,0.5,2.2,0.4,0.25
+WIP-1009,Add feature flags,09/11/2025 14:45,09/16/2025 12:10,0.6,2.0,0.6,0.3
+WIP-1010,Security patch,09/12/2025 10:20,09/12/2025 18:50,0.05,0.25,0.05,0.02
