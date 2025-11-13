@@ -2082,6 +2082,8 @@ Private Sub SeedNamedValues()
     ' Sprint parsing (optional): pattern and 2-digit year base
     EnsureNamedValue "SprintParsePattern", ws.Range("H13"), GetNameValueOr("SprintNamePattern", "{YYYY} Q{Q} S{S}")
     EnsureNamedValue "SprintYearBase", ws.Range("H14"), 2000
+    ' Target points per sprint used by Sprint Work Analysis
+    EnsureNamedValue "SRPEstimation", ws.Range("H15"), 35
     WriteSettingsLabels ws
     WriteGettingStarted
     EnsureDashboard
@@ -2223,6 +2225,7 @@ Private Sub WriteSettingsLabels(ByVal ws As Worksheet)
     ws.Range("G12").Value = "BugIssueTypes (comma list)"
     ws.Range("G13").Value = "SprintParsePattern (e.g., {TEAM} {YY}.{Q}.{S})"
     ws.Range("G14").Value = "SprintYearBase (base for {YY}, e.g., 2000)"
+    ws.Range("G15").Value = "SRP Estimation (points per sprint)"
     ws.Columns("G:H").AutoFit
 End Sub
 
@@ -3455,8 +3458,12 @@ Private Sub Jira_CreatePivotsAndCharts()
     ws.Range("A1").Value = "Jira Insights"
     ws.Range("A1").Font.Bold = True
 
+    ' Sprint Work Analysis at top
+    Dim topRowSWA As Long: topRowSWA = 2
+    topRowSWA = Jira_WriteSprintWorkAnalysis(lo, ws, topRowSWA)
+
     ' Per-story-point completion time statistics (Done only)
-    Dim startStats As Range: Set startStats = ws.Range("A3")
+    Dim startStats As Range: Set startStats = ws.Cells(NextFreeRow(ws), 1)
     startStats.Offset(0, 0).Value = "Story Points"
     startStats.Offset(0, 1).Value = "Avg Days"
     startStats.Offset(0, 2).Value = "StDev Days"
@@ -3470,7 +3477,7 @@ Private Sub Jira_CreatePivotsAndCharts()
     Insights_FormatAsTable ws, ws.Cells(startStats.Row, 1), lastRowStats, startStats.Column + 3, _
         "tblInsights_SPStats", "TableStyleMedium9"
     Dim ch0 As ChartObject
-    Set ch0 = ws.ChartObjects.Add(Left:=400, Top:=ws.Range("A3").Top, Width:=420, Height:=260)
+    Set ch0 = ws.ChartObjects.Add(Left:=400, Top:=ws.Range(startStats.Address).Top, Width:=420, Height:=260)
     ch0.Chart.ChartType = xlColumnClustered
     ch0.Chart.HasTitle = True
     ch0.Chart.ChartTitle.Text = "Avg Days by Story Points"
@@ -3660,6 +3667,127 @@ Private Sub Jira_CreatePivotsAndCharts()
 End Sub
 
 ' -------------------- Insights Formatting helpers --------------------
+
+' Build a compact Sprint Work Analysis block at top of Jira_Insights.
+' Shows Stories and Points per SprintTag and compares Points to SRP Estimation
+' entered by the user (named value: SRPEstimation). Returns the next free row
+' below the section so callers can continue writing content.
+Private Function Jira_WriteSprintWorkAnalysis(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long) As Long
+    On Error GoTo Fail
+    If lo Is Nothing Or ws Is Nothing Then Jira_WriteSprintWorkAnalysis = topRow: Exit Function
+
+    Dim idxTag As Long, idxSP As Long, idxC As Long, idxR As Long
+    On Error Resume Next
+    idxTag = lo.ListColumns("SprintTag").Index
+    idxSP = lo.ListColumns("StoryPoints").Index
+    idxC = Flow_GetColIndex(lo, "Created")
+    idxR = Flow_GetColIndex(lo, "Resolved")
+    On Error GoTo 0
+    If idxSP = 0 Then Jira_WriteSprintWorkAnalysis = topRow: Exit Function
+
+    Dim srp As Double
+    srp = Val(GetNameValueOr("SRPEstimation", "0"))
+
+    Dim byTag As Object: Set byTag = CreateObject("Scripting.Dictionary")
+    Dim byPts As Object: Set byPts = CreateObject("Scripting.Dictionary")
+    Dim i As Long
+    For i = 1 To lo.ListRows.Count
+        Dim tag As String
+        If idxTag > 0 Then
+            tag = CStr(lo.DataBodyRange.Cells(i, idxTag).Value)
+        End If
+        If Len(tag) = 0 Then
+            ' Fallback: derive from Resolved (else Created)
+            Dim refD As Variant
+            If idxR > 0 Then refD = lo.DataBodyRange.Cells(i, idxR).Value
+            If Not IsDate(refD) And idxC > 0 Then refD = lo.DataBodyRange.Cells(i, idxC).Value
+            If IsDate(refD) Then tag = FormatSprintName(CDate(refD))
+        End If
+        If Len(tag) = 0 Then GoTo NextI
+
+        Dim sp As Double: sp = Val(lo.DataBodyRange.Cells(i, idxSP).Value)
+        ' Count any item with points > 0 as a story; accumulate points
+        If Not byTag.Exists(tag) Then byTag(tag) = 0
+        If sp > 0 Then byTag(tag) = CLng(byTag(tag)) + 1
+        If Not byPts.Exists(tag) Then byPts(tag) = 0#
+        If sp > 0 Then byPts(tag) = CDbl(byPts(tag)) + sp
+NextI:
+    Next i
+    If byPts.Count = 0 And byTag.Count = 0 Then Jira_WriteSprintWorkAnalysis = topRow: Exit Function
+
+    ' Sort sprint tags using pattern-based parser (Y/Q/S)
+    Dim keys() As Variant: keys = byPts.Keys
+    Dim a As Long, b As Long
+    For a = LBound(keys) To UBound(keys) - 1
+        For b = a + 1 To UBound(keys)
+            Dim y1 As Integer, q1 As Integer, s1 As Integer
+            Dim y2 As Integer, q2 As Integer, s2 As Integer
+            Dim ok1 As Boolean, ok2 As Boolean
+            ok1 = ParseSprintTagByPattern(CStr(keys(a)), y1, q1, s1)
+            ok2 = ParseSprintTagByPattern(CStr(keys(b)), y2, q2, s2)
+            Dim swap As Boolean: swap = False
+            If ok1 And ok2 Then
+                If (y2 > y1) Or (y2 = y1 And q2 > q1) Or (y2 = y1 And q2 = q1 And s2 > s1) Then swap = True
+            ElseIf Not ok1 And ok2 Then
+                swap = True
+            End If
+            If swap Then
+                Dim t As Variant: t = keys(a): keys(a) = keys(b): keys(b) = t
+            End If
+        Next b
+    Next a
+
+    ' Title + SRP label
+    ws.Cells(topRow, 1).Value = "Sprint Work Analysis"
+    ws.Cells(topRow, 1).Font.Bold = True
+    ws.Cells(topRow, 3).Value = "SRP Estimation (pts/sprint):"
+    ws.Cells(topRow, 4).Value = srp
+
+    ' Table headers
+    Dim r As Long: r = topRow + 2
+    ws.Cells(r, 1).Resize(1, 5).Value = Array("Sprint", "Stories", "Points", "SRP", "Over/Under")
+    ws.Cells(r, 1).Resize(1, 5).Font.Bold = True
+    r = r + 1
+
+    Dim k As Long, tagKey As String
+    For k = LBound(keys) To UBound(keys)
+        tagKey = CStr(keys(k))
+        ws.Cells(r, 1).Value = tagKey
+        ws.Cells(r, 2).Value = CLng(Val(byTag(tagKey)))
+        ws.Cells(r, 3).Value = CDbl(byPts(tagKey))
+        ws.Cells(r, 4).Value = srp
+        ws.Cells(r, 5).Value = CDbl(byPts(tagKey)) - srp
+        r = r + 1
+    Next k
+
+    Dim lastRow As Long: lastRow = r - 1
+    ' Light table formatting
+    Insights_FormatAsTable ws, ws.Cells(topRow + 2, 1), lastRow, 5, "tblSprintWork", "TableStyleLight9"
+    Insights_FramePanel ws, topRow, 1, lastRow, 5
+
+    ' Build chart: Points vs SRP per sprint
+    Dim ch As ChartObject
+    Set ch = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(topRow, 1).Top, Width:=520, Height:=260)
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartTitle.Text = "Points vs SRP"
+    With ch.Chart.SeriesCollection.NewSeries
+        .Name = "Points"
+        .XValues = ws.Range(ws.Cells(topRow + 3, 1), ws.Cells(lastRow, 1))
+        .Values = ws.Range(ws.Cells(topRow + 3, 3), ws.Cells(lastRow, 3))
+        .ChartType = xlColumnClustered
+    End With
+    With ch.Chart.SeriesCollection.NewSeries
+        .Name = "SRP"
+        .XValues = ws.Range(ws.Cells(topRow + 3, 1), ws.Cells(lastRow, 1))
+        .Values = ws.Range(ws.Cells(topRow + 3, 4), ws.Cells(lastRow, 4))
+        .ChartType = xlLine
+    End With
+
+    Jira_WriteSprintWorkAnalysis = lastRow + 2
+    Exit Function
+Fail:
+    Jira_WriteSprintWorkAnalysis = topRow
+End Function
 
 Private Sub Insights_FormatAsTable(ByVal ws As Worksheet, ByVal topLeft As Range, ByVal lastRow As Long, ByVal lastCol As Long, ByVal nameBase As String, ByVal styleName As String)
     On Error GoTo Fail
