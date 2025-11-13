@@ -3676,10 +3676,12 @@ Private Function Jira_WriteSprintWorkAnalysis(ByVal lo As ListObject, ByVal ws A
     On Error GoTo Fail
     If lo Is Nothing Or ws Is Nothing Then Jira_WriteSprintWorkAnalysis = topRow: Exit Function
 
-    Dim idxTag As Long, idxSP As Long, idxC As Long, idxR As Long
+    Dim idxTag As Long, idxSP As Long, idxC As Long, idxR As Long, idxEpic As Long
     On Error Resume Next
     idxTag = lo.ListColumns("SprintTag").Index
     idxSP = lo.ListColumns("StoryPoints").Index
+    idxEpic = lo.ListColumns("Epic").Index
+    If idxEpic = 0 Then idxEpic = Flow_Col(lo, Array("epic","parent","parent link","parent key","epic link"))
     idxC = Flow_GetColIndex(lo, "Created")
     idxR = Flow_GetColIndex(lo, "Resolved")
     On Error GoTo 0
@@ -3688,43 +3690,38 @@ Private Function Jira_WriteSprintWorkAnalysis(ByVal lo As ListObject, ByVal ws A
     Dim srp As Double
     srp = Val(GetNameValueOr("SRPEstimation", "0"))
 
-    Dim byTag As Object: Set byTag = CreateObject("Scripting.Dictionary")
-    Dim byPts As Object: Set byPts = CreateObject("Scripting.Dictionary")
+    ' Collect sprints (sorted) and epics
+    Dim sprints As Object: Set sprints = CreateObject("Scripting.Dictionary")
+    Dim sprintKey As String
+    Dim epics As Object: Set epics = CreateObject("Scripting.Dictionary")
     Dim i As Long
     For i = 1 To lo.ListRows.Count
         Dim tag As String
-        If idxTag > 0 Then
-            tag = CStr(lo.DataBodyRange.Cells(i, idxTag).Value)
-        End If
+        If idxTag > 0 Then tag = CStr(lo.DataBodyRange.Cells(i, idxTag).Value)
         If Len(tag) = 0 Then
-            ' Fallback: derive from Resolved (else Created)
             Dim refD As Variant
             If idxR > 0 Then refD = lo.DataBodyRange.Cells(i, idxR).Value
             If Not IsDate(refD) And idxC > 0 Then refD = lo.DataBodyRange.Cells(i, idxC).Value
             If IsDate(refD) Then tag = FormatSprintName(CDate(refD))
         End If
-        If Len(tag) = 0 Then GoTo NextI
-
-        Dim sp As Double: sp = Val(lo.DataBodyRange.Cells(i, idxSP).Value)
-        ' Count any item with points > 0 as a story; accumulate points
-        If Not byTag.Exists(tag) Then byTag(tag) = 0
-        If sp > 0 Then byTag(tag) = CLng(byTag(tag)) + 1
-        If Not byPts.Exists(tag) Then byPts(tag) = 0#
-        If sp > 0 Then byPts(tag) = CDbl(byPts(tag)) + sp
-NextI:
+        If Len(tag) > 0 Then sprints(tag) = True
+        Dim ep As String
+        If idxEpic > 0 Then ep = CStr(lo.DataBodyRange.Cells(i, idxEpic).Value)
+        If Len(Trim$(ep)) = 0 Then ep = "(No Epic)"
+        epics(ep) = True
     Next i
-    If byPts.Count = 0 And byTag.Count = 0 Then Jira_WriteSprintWorkAnalysis = topRow: Exit Function
+    If sprints.Count = 0 Or epics.Count = 0 Then Jira_WriteSprintWorkAnalysis = topRow: Exit Function
 
-    ' Sort sprint tags using pattern-based parser (Y/Q/S)
-    Dim keys() As Variant: keys = byPts.Keys
+    ' Sort sprints by Y/Q/S
+    Dim sprKeys() As Variant: sprKeys = sprints.Keys
     Dim a As Long, b As Long
-    For a = LBound(keys) To UBound(keys) - 1
-        For b = a + 1 To UBound(keys)
+    For a = LBound(sprKeys) To UBound(sprKeys) - 1
+        For b = a + 1 To UBound(sprKeys)
             Dim y1 As Integer, q1 As Integer, s1 As Integer
             Dim y2 As Integer, q2 As Integer, s2 As Integer
             Dim ok1 As Boolean, ok2 As Boolean
-            ok1 = ParseSprintTagByPattern(CStr(keys(a)), y1, q1, s1)
-            ok2 = ParseSprintTagByPattern(CStr(keys(b)), y2, q2, s2)
+            ok1 = ParseSprintTagByPattern(CStr(sprKeys(a)), y1, q1, s1)
+            ok2 = ParseSprintTagByPattern(CStr(sprKeys(b)), y2, q2, s2)
             Dim swap As Boolean: swap = False
             If ok1 And ok2 Then
                 If (y2 > y1) Or (y2 = y1 And q2 > q1) Or (y2 = y1 And q2 = q1 And s2 > s1) Then swap = True
@@ -3732,56 +3729,143 @@ NextI:
                 swap = True
             End If
             If swap Then
-                Dim t As Variant: t = keys(a): keys(a) = keys(b): keys(b) = t
+                Dim t As Variant: t = sprKeys(a): sprKeys(a) = sprKeys(b): sprKeys(b) = t
             End If
         Next b
     Next a
 
-    ' Title + SRP label
+    ' Build matrices: key = epic|sprint
+    Dim cnt As Object: Set cnt = CreateObject("Scripting.Dictionary")
+    Dim pts As Object: Set pts = CreateObject("Scripting.Dictionary")
+    Dim totalPts As Double: totalPts = 0
+    For i = 1 To lo.ListRows.Count
+        Dim e As String
+        If idxEpic > 0 Then e = CStr(lo.DataBodyRange.Cells(i, idxEpic).Value)
+        If Len(Trim$(e)) = 0 Then e = "(No Epic)"
+        Dim tg As String
+        If idxTag > 0 Then tg = CStr(lo.DataBodyRange.Cells(i, idxTag).Value)
+        If Len(tg) = 0 Then
+            Dim rd As Variant
+            If idxR > 0 Then rd = lo.DataBodyRange.Cells(i, idxR).Value
+            If Not IsDate(rd) And idxC > 0 Then rd = lo.DataBodyRange.Cells(i, idxC).Value
+            If IsDate(rd) Then tg = FormatSprintName(CDate(rd))
+        End If
+        If Len(tg) = 0 Then GoTo NextRow
+        Dim sp As Double: sp = Val(lo.DataBodyRange.Cells(i, idxSP).Value)
+        Dim k As String: k = e & "|" & tg
+        If sp > 0 Then
+            If Not cnt.Exists(k) Then cnt(k) = 0
+            cnt(k) = CLng(cnt(k)) + 1
+            If Not pts.Exists(k) Then pts(k) = 0#
+            pts(k) = CDbl(pts(k)) + sp
+            totalPts = totalPts + sp
+        End If
+NextRow:
+    Next i
+
+    ' Title (SRP helper label removed per request)
     ws.Cells(topRow, 1).Value = "Sprint Work Analysis"
     ws.Cells(topRow, 1).Font.Bold = True
-    ws.Cells(topRow, 3).Value = "SRP Estimation (pts/sprint):"
-    ws.Cells(topRow, 4).Value = srp
 
-    ' Table headers
-    Dim r As Long: r = topRow + 2
-    ws.Cells(r, 1).Resize(1, 5).Value = Array("Sprint", "Stories", "Points", "SRP", "Over/Under")
-    ws.Cells(r, 1).Resize(1, 5).Font.Bold = True
+    ' Build two-tier header: Parent | [Sprint N -> Stories/Points] ... | Totals and metrics
+    Dim rTier1 As Long: rTier1 = topRow + 2
+    Dim rTier2 As Long: rTier2 = rTier1 + 1
+    Dim c As Long: c = 1
+    Dim j As Long
+    ' First column header (table header row)
+    ws.Cells(rTier2, c).Value = "Parent"
+    c = c + 1
+    ' Sprint blocks with merged tier-1 labels
+    For j = LBound(sprKeys) To UBound(sprKeys)
+        Dim lbl As String: lbl = "Sprint " & CStr(j - LBound(sprKeys) + 1)
+        With ws.Range(ws.Cells(rTier1, c), ws.Cells(rTier1, c + 1))
+            .Merge
+            .Value = lbl
+            .HorizontalAlignment = -4108 ' xlCenter
+            .Font.Bold = True
+        End With
+        ws.Cells(rTier2, c).Value = "Stories"
+        ws.Cells(rTier2, c + 1).Value = "Points"
+        c = c + 2
+    Next j
+    ' Summary columns (single columns; tier-2 acts as the table header)
+    ws.Cells(rTier2, c).Value = "Total Stories": c = c + 1
+    ws.Cells(rTier2, c).Value = "Total Points": c = c + 1
+    ws.Cells(rTier2, c).Value = "Average Story Size": c = c + 1
+    ws.Cells(rTier2, c).Value = "Percentage of Work": c = c + 1
+    ws.Cells(rTier2, c).Value = "SRP Estimation": c = c + 1
+    ws.Cells(rTier2, c).Value = "Over/Under": c = c + 1
+    ' Emphasize header rows (force black text for readability)
+    With ws.Range(ws.Cells(rTier1, 1), ws.Cells(rTier1, c - 1))
+        .Font.Bold = True
+        .Font.Color = RGB(0, 0, 0)
+    End With
+    With ws.Range(ws.Cells(rTier2, 1), ws.Cells(rTier2, c - 1))
+        .Font.Bold = True
+        .Font.Color = RGB(0, 0, 0)
+    End With
+    ' Data rows start after tier-2 header
+    Dim r As Long: r = rTier2
+
+    ' Write rows per epic (alphabetical for stability)
+    Dim epKeys() As Variant: epKeys = epics.Keys
+    Dim ea As Long, eb As Long
+    For ea = LBound(epKeys) To UBound(epKeys) - 1
+        For eb = ea + 1 To UBound(epKeys)
+            If CStr(epKeys(eb)) < CStr(epKeys(ea)) Then
+                Dim tx As Variant: tx = epKeys(ea): epKeys(ea) = epKeys(eb): epKeys(eb) = tx
+            End If
+        Next eb
+    Next ea
+
     r = r + 1
-
-    Dim k As Long, tagKey As String
-    For k = LBound(keys) To UBound(keys)
-        tagKey = CStr(keys(k))
-        ws.Cells(r, 1).Value = tagKey
-        ws.Cells(r, 2).Value = CLng(Val(byTag(tagKey)))
-        ws.Cells(r, 3).Value = CDbl(byPts(tagKey))
-        ws.Cells(r, 4).Value = srp
-        ws.Cells(r, 5).Value = CDbl(byPts(tagKey)) - srp
+    For ea = LBound(epKeys) To UBound(epKeys)
+        Dim epName As String: epName = CStr(epKeys(ea))
+        Dim col As Long: col = 1
+        ws.Cells(r, col).Value = epName: col = col + 1
+        Dim totStories As Long: totStories = 0
+        Dim totPoints As Double: totPoints = 0
+        For j = LBound(sprKeys) To UBound(sprKeys)
+            Dim key As String: key = epName & "|" & CStr(sprKeys(j))
+            Dim sCnt As Long: If cnt.Exists(key) Then sCnt = CLng(cnt(key)) Else sCnt = 0
+            Dim sPts As Double: If pts.Exists(key) Then sPts = CDbl(pts(key)) Else sPts = 0#
+            ws.Cells(r, col).Value = sCnt: col = col + 1
+            ws.Cells(r, col).Value = sPts: col = col + 1
+            totStories = totStories + sCnt
+            totPoints = totPoints + sPts
+        Next j
+        ws.Cells(r, col).Value = totStories: col = col + 1
+        ws.Cells(r, col).Value = totPoints: col = col + 1
+        If totStories > 0 Then
+            ws.Cells(r, col).Value = Round(totPoints / totStories, 2)
+        Else
+            ws.Cells(r, col).Value = 0
+        End If
+        col = col + 1
+        If totalPts > 0 Then
+            ws.Cells(r, col).Value = totPoints / totalPts
+        Else
+            ws.Cells(r, col).Value = 0
+        End If
+        col = col + 1
+        ' Leave SRP blank for manual entry; compute Over/Under from Total Points - SRP
+        ws.Cells(r, col).Value = "": col = col + 1 ' SRP Estimation (manual)
+        ws.Cells(r, col).FormulaR1C1 = "=RC[-4]-RC[-1]": col = col + 1
         r = r + 1
-    Next k
+    Next ea
 
     Dim lastRow As Long: lastRow = r - 1
-    ' Light table formatting
-    Insights_FormatAsTable ws, ws.Cells(topRow + 2, 1), lastRow, 5, "tblSprintWork", "TableStyleLight9"
-    Insights_FramePanel ws, topRow, 1, lastRow, 5
-
-    ' Build chart: Points vs SRP per sprint
-    Dim ch As ChartObject
-    Set ch = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(topRow, 1).Top, Width:=520, Height:=260)
-    ch.Chart.HasTitle = True
-    ch.Chart.ChartTitle.Text = "Points vs SRP"
-    With ch.Chart.SeriesCollection.NewSeries
-        .Name = "Points"
-        .XValues = ws.Range(ws.Cells(topRow + 3, 1), ws.Cells(lastRow, 1))
-        .Values = ws.Range(ws.Cells(topRow + 3, 3), ws.Cells(lastRow, 3))
-        .ChartType = xlColumnClustered
-    End With
-    With ch.Chart.SeriesCollection.NewSeries
-        .Name = "SRP"
-        .XValues = ws.Range(ws.Cells(topRow + 3, 1), ws.Cells(lastRow, 1))
-        .Values = ws.Range(ws.Cells(topRow + 3, 4), ws.Cells(lastRow, 4))
-        .ChartType = xlLine
-    End With
+    ' Write as plain range (no Excel Table) to keep duplicate headers like 'Stories'/'Points' without numeric suffixes
+    ' Number formats for key columns
+    On Error Resume Next
+    Dim colAvg As Long, colPct As Long
+    colAvg = c - 4 ' Average Story Size column index
+    colPct = c - 3 ' Percentage of Work column index
+    ws.Range(ws.Cells(rTier2 + 1, colAvg), ws.Cells(lastRow, colAvg)).NumberFormat = "0.00"
+    ws.Range(ws.Cells(rTier2 + 1, colPct), ws.Cells(lastRow, colPct)).NumberFormat = "0.0%"
+    On Error GoTo 0
+    ws.Columns("A:Z").AutoFit
+    Insights_FramePanel ws, topRow, 1, lastRow, c - 1
 
     Jira_WriteSprintWorkAnalysis = lastRow + 2
     Exit Function
