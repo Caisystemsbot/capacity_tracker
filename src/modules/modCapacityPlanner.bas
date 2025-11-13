@@ -2,6 +2,13 @@
 
 ' Compile-time feature flags
 #Const FLOW_OVERLAY_SHAPES = 0 ' Set to 1 to draw WIP backdrop/labels as shapes
+' Toggle Flow sections while stabilizing: 0=disabled, 1=enabled
+#Const FLOW_ENABLE_WIP = 0
+#Const FLOW_ENABLE_SCATTER = 0
+
+' Runtime flag mirrors to avoid conditional-compilation inside procedures
+Private Const CFG_FLOW_ENABLE_WIP As Boolean = False
+Private Const CFG_FLOW_ENABLE_SCATTER As Boolean = False
 
 ' Excel constants (avoid references)
 Private Const xlSrcRange As Long = 1
@@ -170,7 +177,9 @@ Private Function EnsureWIPFactsTable(ByVal ws As Worksheet) As ListObject
     Dim headers As Variant
     headers = Array("IssueKey","Summary","Created","Resolved","TimeInTodo","TimeInProgress","TimeInTesting","TimeInReview","WIPTotalDays","CycleCalDays")
     Dim lo As ListObject
-    On Error Resume Next: Set lo = ws.ListObjects("tblWIPFacts"): On Error GoTo 0
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblWIPFacts")
+    On Error GoTo 0
     If lo Is Nothing Then
         Set lo = EnsureTable(ws, "tblWIPFacts", headers)
     Else
@@ -183,7 +192,9 @@ Private Function EnsureWIPFactsTable(ByVal ws As Worksheet) As ListObject
             Next i
         End If
         If Not ok Then
-            On Error Resume Next: lo.Delete: On Error GoTo 0
+            On Error Resume Next
+            lo.Delete
+            On Error GoTo 0
             Set lo = EnsureTable(ws, "tblWIPFacts", headers)
         End If
     End If
@@ -261,9 +272,15 @@ Private Sub EnsureSheets()
     Dim cfg As Worksheet: Set cfg = EnsureConfig()
 
     ' Create core sheets (ignore if already there)
-    On Error Resume Next: Set cfg = EnsureSheet("Getting_Started"): On Error GoTo CoreFail
-    On Error Resume Next: EnsureSheet "Dashboard": On Error GoTo CoreFail
-    On Error Resume Next: EnsureSheet "Logs": On Error GoTo CoreFail
+    On Error Resume Next
+    Set cfg = EnsureSheet("Getting_Started")
+    On Error GoTo CoreFail
+    On Error Resume Next
+    EnsureSheet "Dashboard"
+    On Error GoTo CoreFail
+    On Error Resume Next
+    EnsureSheet "Logs"
+    On Error GoTo CoreFail
 
     ' Ensure Metrics sheet exists (build skeleton once)
     Dim m As Worksheet: Set m = EnsureSheet("Metrics")
@@ -356,7 +373,8 @@ Public Sub Flow_BuildCharts(Optional ByVal loSelected As ListObject)
 
     Dim nextTop As Long: nextTop = 3
 
-    ' Build WIP Aging first, so its data is visible up front
+' Build WIP Aging first, so its data is visible up front
+If Flow_FlagEnableWIP() Then
     Dim hasTIS As Boolean, hasUn As Boolean
     Dim idxTodo As Long, idxProg As Long, idxTest As Long, idxRev As Long
     idxTodo = Flow_GetColIndex(lo, "TimeInTodo")
@@ -376,7 +394,9 @@ Public Sub Flow_BuildCharts(Optional ByVal loSelected As ListObject)
     ws.Cells(nextTop, 1).Font.Bold = True
     If Not hasTIS Then
         ws.Cells(nextTop + 1, 1).Value = "(No time-in-status columns found: expected Time In Todo/Progress/Testing/Review. Falling back to derive from Created/Start Progress/Resolved if available.)"
-        On Error Resume Next: LogDbg "Flow_WIP_Mode", "derive_from_dates": On Error GoTo 0
+        On Error Resume Next
+        LogDbg "Flow_WIP_Mode", "derive_from_dates"
+        On Error GoTo 0
         ' Attempt a derived build if dates exist
         nextTop = Flow_NextFreeTop(ws)
         Flow_WriteWIPAging_Data lo, ws, nextTop, True, True ' include resolved, allow date-derived durations
@@ -386,31 +406,41 @@ Public Sub Flow_BuildCharts(Optional ByVal loSelected As ListObject)
             Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
             Flow_MakeWIPAging_Chart ws, nextTop
         End If
-    ElseIf Not hasUn Then
-        ws.Cells(nextTop + 1, 1).Value = "(No unresolved items; showing historical aging at resolution)"
-        On Error Resume Next: LogDbg "Flow_WIP_Mode", "historical_at_resolution": On Error GoTo 0
-        nextTop = Flow_NextFreeTop(ws)
-        Flow_WriteWIPAging_Data lo, ws, nextTop, True, True ' include resolved rows
-        Flow_MakeWIPAging_Chart ws, nextTop
-        If Not Flow_WIPAging_HasData(ws, nextTop) Then
-            nextTop = Flow_NextFreeTop(ws)
-            Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
-            Flow_MakeWIPAging_Chart ws, nextTop
-        End If
     Else
-        ' Build the chart from unresolved items
-        On Error Resume Next: LogDbg "Flow_WIP_Mode", "active_wip": On Error GoTo 0
-        nextTop = Flow_NextFreeTop(ws)
-        Flow_WriteWIPAging_Data lo, ws, nextTop, False, True
-        Flow_MakeWIPAging_Chart ws, nextTop
-        If Not Flow_WIPAging_HasData(ws, nextTop) Then
+        If Not hasUn Then
+            ws.Cells(nextTop + 1, 1).Value = "(No unresolved items; showing historical aging at resolution)"
+            On Error Resume Next
+            LogDbg "Flow_WIP_Mode", "historical_at_resolution"
+            On Error GoTo 0
             nextTop = Flow_NextFreeTop(ws)
-            Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
+            Flow_WriteWIPAging_Data lo, ws, nextTop, True, True ' include resolved rows
             Flow_MakeWIPAging_Chart ws, nextTop
+            If Not Flow_WIPAging_HasData(ws, nextTop) Then
+                nextTop = Flow_NextFreeTop(ws)
+                Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
+                Flow_MakeWIPAging_Chart ws, nextTop
+            End If
+        Else
+            ' Build the chart from unresolved items
+            On Error Resume Next
+            LogDbg "Flow_WIP_Mode", "active_wip"
+            On Error GoTo 0
+            nextTop = Flow_NextFreeTop(ws)
+            Flow_WriteWIPAging_Data lo, ws, nextTop, False, True
+            Flow_MakeWIPAging_Chart ws, nextTop
+            If Not Flow_WIPAging_HasData(ws, nextTop) Then
+                nextTop = Flow_NextFreeTop(ws)
+                Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
+                Flow_MakeWIPAging_Chart ws, nextTop
+            End If
         End If
     End If
 
     nextTop = Flow_NextFreeTop(ws)
+Else
+    ' WIP disabled by feature flag
+    nextTop = Flow_NextFreeTop(ws)
+End If
 
     ' (Removed) Cumulative Flow Diagram table (To Do / In Progress / Done)
     ' Add Sprint Span bars (items crossing >1 sprint)
@@ -419,6 +449,12 @@ Public Sub Flow_BuildCharts(Optional ByVal loSelected As ListObject)
     If builtSpan Then
         Flow_MakeSprintSpan_Chart ws, nextTop
         nextTop = Flow_NextFreeTop(ws)
+    Else
+        ' Fallback: include single-sprint items so a chart always renders
+        If Flow_WriteSprintSpan_Data(lo, ws, nextTop, True) Then
+            Flow_MakeSprintSpan_Chart ws, nextTop, "Sprint Spans (all items)"
+            nextTop = Flow_NextFreeTop(ws)
+        End If
     End If
 
     ' Proceed with Throughput and Cycle Time charts after WIP Aging
@@ -428,9 +464,24 @@ Public Sub Flow_BuildCharts(Optional ByVal loSelected As ListObject)
     Flow_MakeThroughput_Chart ws, nextTop
     nextTop = Flow_NextFreeTop(ws)
 
+If Flow_FlagEnableScatter() Then
     ' Cycle Time Scatter (completed vs days)
-    Flow_WriteCycleScatter_Data lo, ws, nextTop
-    Flow_MakeCycleScatter_Chart ws, nextTop
+    Dim scatterTop As Long: scatterTop = nextTop
+    Flow_WriteCycleScatter_Data lo, ws, scatterTop
+    Flow_MakeCycleScatter_Chart ws, scatterTop
+    ' If no points were written (no completed items in source), try Jira_Facts
+    If Not Flow_Scatter_HasData(ws, scatterTop) Then
+        Dim loAlt As ListObject
+        Set loAlt = Flow_FindFactsTable()
+        If Not loAlt Is Nothing Then
+            If Not (loAlt.Parent Is lo.Parent And loAlt.Name = lo.Name) Then
+                nextTop = Flow_NextFreeTop(ws)
+                Flow_WriteCycleScatter_Data loAlt, ws, nextTop
+                Flow_MakeCycleScatter_Chart ws, nextTop
+            End If
+        End If
+    End If
+End If
 
     ws.Columns("A:Z").AutoFit
     LogOk "Flow_BuildCharts"
@@ -460,81 +511,34 @@ Fail:
     MsgBox "Flow_BuildCharts failed: " & Err.Description, vbExclamation
 End Sub
 
-' Append Flow Metrics (WIP Aging, Sprint Spans, Throughput, Cycle Scatter)
+' Append Flow Metrics (Sprint Spans and Throughput only)
 ' to an existing sheet (e.g., Jira_Insights) without clearing it.
-Private Sub Flow_AppendChartsToSheet(ByVal lo As ListObject, ByVal ws As Worksheet)
+Private Sub Flow_AppendChartsToSheet_EX(ByVal lo As ListObject, ByVal ws As Worksheet)
+    Dim nextTop As Long
     On Error GoTo Fail
     If lo Is Nothing Or ws Is Nothing Then Exit Sub
+    LogStart "Flow_AppendChartsToSheet", "dstSheet=" & ws.Name
 
-    Dim nextTop As Long
+    ' Find next placement row
     nextTop = Flow_NextFreeTop(ws)
 
-    ' Detect time-in-status and unresolved presence
-    Dim hasTIS As Boolean, hasUn As Boolean
-    Dim idxTodo As Long, idxProg As Long, idxTest As Long, idxRev As Long
-    idxTodo = Flow_GetColIndex(lo, "TimeInTodo")
-    idxProg = Flow_GetColIndex(lo, "TimeInProgress")
-    idxTest = Flow_GetColIndex(lo, "TimeInTesting")
-    idxRev = Flow_GetColIndex(lo, "TimeInReview")
-    hasTIS = (idxTodo + idxProg + idxTest + idxRev) > 0
-    hasUn = Flow_HasUnresolved(lo)
-
-    ' WIP Aging section
-    nextTop = Flow_NextFreeTop(ws)
-    ws.Cells(nextTop, 1).Value = "WIP Aging"
-    ws.Cells(nextTop, 1).Font.Bold = True
-    If Not hasTIS Then
-        ws.Cells(nextTop + 1, 1).Value = "(No time-in-status columns found: expected Time In Todo/Progress/Testing/Review. Falling back to derive from Created/Start Progress/Resolved if available.)"
-        nextTop = Flow_NextFreeTop(ws)
-        Flow_WriteWIPAging_Data lo, ws, nextTop, True, True ' include resolved, allow date-derived durations
-        Flow_MakeWIPAging_Chart ws, nextTop
-        If Not Flow_WIPAging_HasData(ws, nextTop) Then
-            ' Fallback to a simple builder to ensure something renders
-            nextTop = Flow_NextFreeTop(ws)
-            Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
-            Flow_MakeWIPAging_Chart ws, nextTop
-        End If
-    ElseIf Not hasUn Then
-        ws.Cells(nextTop + 1, 1).Value = "(No unresolved items; showing historical aging at resolution)"
-        nextTop = Flow_NextFreeTop(ws)
-        Flow_WriteWIPAging_Data lo, ws, nextTop, True, True
-        Flow_MakeWIPAging_Chart ws, nextTop
-        If Not Flow_WIPAging_HasData(ws, nextTop) Then
-            nextTop = Flow_NextFreeTop(ws)
-            Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
-            Flow_MakeWIPAging_Chart ws, nextTop
-        End If
-    Else
-        nextTop = Flow_NextFreeTop(ws)
-        Flow_WriteWIPAging_Data lo, ws, nextTop, False, True
-        Flow_MakeWIPAging_Chart ws, nextTop
-        If Not Flow_WIPAging_HasData(ws, nextTop) Then
-            nextTop = Flow_NextFreeTop(ws)
-            Flow_WriteWIPAging_Data_Simple lo, ws, nextTop
-            Flow_MakeWIPAging_Chart ws, nextTop
-        End If
-    End If
-
-    ' Sprint Spans (only items crossing >1 sprint)
-    nextTop = Flow_NextFreeTop(ws)
+    ' Sprint Spans (prefer >1 sprint; fallback to all items)
     If Flow_WriteSprintSpan_Data(lo, ws, nextTop) Then
         Flow_MakeSprintSpan_Chart ws, nextTop
+        nextTop = Flow_NextFreeTop(ws)
+    ElseIf Flow_WriteSprintSpan_Data(lo, ws, nextTop, True) Then
+        Flow_MakeSprintSpan_Chart ws, nextTop, "Sprint Spans (all items)"
+        nextTop = Flow_NextFreeTop(ws)
     End If
 
-    ' Throughput
-    nextTop = Flow_NextFreeTop(ws)
+    ' Throughput run chart
     Flow_WriteThroughput_Data lo, ws, nextTop
     Flow_MakeThroughput_Chart ws, nextTop
 
-    ' Cycle Time scatter
-    nextTop = Flow_NextFreeTop(ws)
-    Flow_WriteCycleScatter_Data lo, ws, nextTop
-    Flow_MakeCycleScatter_Chart ws, nextTop
-
     ws.Columns("A:Z").AutoFit
+    LogOk "Flow_AppendChartsToSheet"
     Exit Sub
 Fail:
-    On Error Resume Next
     LogErr "Flow_AppendChartsToSheet", "Err " & Err.Number & ": " & Err.Description
 End Sub
 
@@ -815,8 +819,12 @@ Private Sub Flow_WriteCycleScatter_Data(ByVal lo As ListObject, ByVal ws As Work
     Dim idxR As Long, idxC As Long, idxCal As Long, idxSprint As Long
     idxR = Flow_GetColIndex(lo, "Resolved")
     idxC = Flow_GetColIndex(lo, "Created")
-    On Error Resume Next: idxCal = lo.ListColumns("CycleCalDays").Index: On Error GoTo 0
-    On Error Resume Next: idxSprint = lo.ListColumns("SprintTag").Index: On Error GoTo 0
+    On Error Resume Next
+    idxCal = lo.ListColumns("CycleCalDays").Index
+    On Error GoTo 0
+    On Error Resume Next
+    idxSprint = lo.ListColumns("SprintTag").Index
+    On Error GoTo 0
     If idxR = 0 Or idxC = 0 Then Exit Sub
     On Error Resume Next
     LogDbg "Flow_Scatter_Idx", "Sheet=" & lo.Parent.Name & "; Table=" & lo.Name & _
@@ -1483,6 +1491,14 @@ Private Function Flow_WIPAging_HasData(ByVal ws As Worksheet, ByVal topRow As Lo
     Flow_WIPAging_HasData = (lastRow > hdr.Row + 1)
 End Function
 
+' Determine if a scatter-style block (header at topRow+1, X at col A, Y at col B)
+' wrote any data rows below the header.
+Private Function Flow_Scatter_HasData(ByVal ws As Worksheet, ByVal topRow As Long) As Boolean
+    Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
+    Flow_Scatter_HasData = (lastRow > hdr.Row + 1)
+End Function
+
 ' Simple, easy-to-read writer for WIP Aging that needs only Created, StartProgress (optional), Resolved (optional).
 ' Stages collapse to To Do (not started) and In Progress (started). Bugfixes/Test/Review are ignored for clarity.
 Private Sub Flow_WriteWIPAging_Data_Simple(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long)
@@ -1792,9 +1808,19 @@ Private Sub Flow_LogChartSeries(ByVal ch As Object, ByVal tag As String)
     On Error GoTo 0
 End Sub
 
+' -------------------- Feature Flag Helpers --------------------
+
+Private Function Flow_FlagEnableWIP() As Boolean
+    Flow_FlagEnableWIP = CFG_FLOW_ENABLE_WIP
+End Function
+
+Private Function Flow_FlagEnableScatter() As Boolean
+    Flow_FlagEnableScatter = CFG_FLOW_ENABLE_SCATTER
+End Function
+
 ' -------------------- Sprint Span (Gantt-like) --------------------
 
-Private Function Flow_WriteSprintSpan_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long) As Boolean
+Private Function Flow_WriteSprintSpan_Data(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long, Optional ByVal includeSingles As Boolean = False) As Boolean
     On Error GoTo Fail
     Dim idxKey As Long, idxCreated As Long, idxStart As Long, idxResolved As Long, idxSpan As Long
     On Error Resume Next
@@ -1810,7 +1836,11 @@ Private Function Flow_WriteSprintSpan_Data(ByVal lo As ListObject, ByVal ws As W
     If ((idxCreated = 0 And idxStart = 0) Or idxResolved = 0) And idxSprintCol = 0 Then Exit Function
 
     Dim row As Long: row = topRow
-    ws.Cells(row, 1).Value = "Sprint Spans (>1 sprint)"
+    If includeSingles Then
+        ws.Cells(row, 1).Value = "Sprint Spans (all items)"
+    Else
+        ws.Cells(row, 1).Value = "Sprint Spans (>1 sprint)"
+    End If
     ws.Cells(row, 1).Font.Bold = True
     row = row + 1
     ws.Cells(row, 1).Resize(1, 3).Value = Array("IssueKey", "StartSprint", "Span")
@@ -1872,7 +1902,7 @@ Private Function Flow_WriteSprintSpan_Data(ByVal lo As ListObject, ByVal ws As W
             If startNum > QuarterSprints(q) Then startNum = QuarterSprints(q)
         End If
 
-        If span <= 1 Then GoTo NextI
+        If (Not includeSingles) And span <= 1 Then GoTo NextI
 
         If idxKey > 0 Then ws.Cells(row, 1).Value = CStr(lo.DataBodyRange.Cells(i, idxKey).Value) Else ws.Cells(row, 1).Value = "Item " & i
         ws.Cells(row, 2).Value = startNum
@@ -1881,16 +1911,13 @@ Private Function Flow_WriteSprintSpan_Data(ByVal lo As ListObject, ByVal ws As W
 NextI:
     Next i
 
-    If row <= topRow + 2 Then
-        ' nothing written
-        Exit Function
-    End If
+    If row <= topRow + 2 Then Exit Function
     Flow_WriteSprintSpan_Data = True
     Exit Function
 Fail:
 End Function
 
-Private Sub Flow_MakeSprintSpan_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
+Private Sub Flow_MakeSprintSpan_Chart(ByVal ws As Worksheet, ByVal topRow As Long, Optional ByVal titleText As String = "Sprint Spans (>1)")
     Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
     Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
     If lastRow <= hdr.Row + 1 Then Exit Sub
@@ -1908,7 +1935,7 @@ Private Sub Flow_MakeSprintSpan_Chart(ByVal ws As Worksheet, ByVal topRow As Lon
     Set ch = ws.ChartObjects.Add(Left:=380, Top:=ws.Cells(topRow + 1, 1).Top, Width:=540, Height:=260)
     ch.Chart.ChartType = xlBarStacked
     ch.Chart.HasTitle = True
-    ch.Chart.ChartTitle.Text = "Sprint Spans (>1)"
+    ch.Chart.ChartTitle.Text = titleText
 
     With ch.Chart
         .SeriesCollection.NewSeries
@@ -2078,7 +2105,9 @@ Private Function EnsureSheet(ByVal name As String) As Worksheet
         Set EnsureSheet = Worksheets(name)
     Else
         Set EnsureSheet = Worksheets.Add(After:=Worksheets(Worksheets.Count))
-        On Error Resume Next: EnsureSheet.Name = name: On Error GoTo 0
+        On Error Resume Next
+        EnsureSheet.Name = name
+        On Error GoTo 0
     End If
 End Function
 
@@ -2268,7 +2297,11 @@ Private Function EnsureRosterTable(ByVal ws As Worksheet) As ListObject
     End If
 
     If rebuild Then
-        If Not lo Is Nothing Then On Error Resume Next: lo.Delete: On Error GoTo 0
+        If Not lo Is Nothing Then
+            On Error Resume Next
+            lo.Delete
+            On Error GoTo 0
+        End If
         Set lo = EnsureTable(ws, "tblRoster", expected)
         ApplyRosterValidation lo
     Else
@@ -2415,7 +2448,9 @@ Private Function EnsureSheetTable(ByVal sheetName As String, ByVal tableName As 
     Dim ws As Worksheet
     Set ws = EnsureSheet(sheetName)
     Dim lo As ListObject
-    On Error Resume Next: Set lo = ws.ListObjects(tableName): On Error GoTo 0
+    On Error Resume Next
+    Set lo = ws.ListObjects(tableName)
+    On Error GoTo 0
     If lo Is Nothing Then Set lo = EnsureTable(ws, tableName, headers)
     Set EnsureSheetTable = lo
 End Function
@@ -2442,7 +2477,9 @@ Public Sub Diagnostics_ExportLogsCsv()
     On Error GoTo Fail
     Dim ws As Worksheet: Set ws = EnsureSheet("Logs")
     Dim lo As ListObject
-    On Error Resume Next: Set lo = ws.ListObjects("tblLogs"): On Error GoTo 0
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblLogs")
+    On Error GoTo 0
     If lo Is Nothing Or lo.ListRows.Count = 0 Then
         MsgBox "No logs to export.", vbInformation
         Exit Sub
@@ -2506,8 +2543,26 @@ Private Sub EnsureDashboard()
     ws.Range("B6").Formula = "=SprintLengthDays"
     ws.Range("A1:A6").Font.Bold = True
 
+    ' HARD RESET: remove all legacy Form Controls buttons to prevent duplicates like "Button ###"
+    On Error Resume Next
+    ws.Buttons.Delete
+    ' Also remove shapes that are Form Controls buttons (defensive across Excel versions)
+    Dim shp As Shape
+    For Each shp In ws.Shapes
+        If shp.Type = 8 Then ' msoFormControl
+            Dim fct As Variant
+            Err.Clear
+            fct = shp.FormControlType
+            If Err.Number = 0 Then
+                If fct = 0 Then shp.Delete ' 0 = xlButtonControl
+            End If
+            Err.Clear
+        End If
+    Next shp
+    On Error GoTo 0
+
     ' Create or refresh buttons, defensively removing any shape with same name
-    Dim nm As Variant, shp As Shape
+    Dim nm As Variant
     For Each nm In Array("btnCreateAvailability", "btnAdvanceAvailability", "btnSanitizeRawAndBuild")
         On Error Resume Next
         ws.Buttons(CStr(nm)).Delete
@@ -2516,6 +2571,22 @@ Private Sub EnsureDashboard()
             If StrComp(shp.Name, CStr(nm), vbTextCompare) = 0 Then shp.Delete
         Next shp
     Next nm
+
+    ' Also clean up any stray generic forms buttons or duplicates from prior runs
+    ' Criteria: default caption like "Button ###" or OnAction targets our macros
+    Dim b As Button, oa As String, cap As String
+    On Error Resume Next
+    For Each b In ws.Buttons
+        cap = CStr(b.Caption)
+        oa = CStr(b.OnAction)
+        If LCase$(Left$(Trim$(cap), 7)) = "button " _
+           Or InStr(1, oa, "!CreateOrAdvanceAvailability", vbTextCompare) > 0 _
+           Or InStr(1, oa, "!SanitizeRawAndBuildInsights", vbTextCompare) > 0 _
+           Or InStr(1, oa, "!RefreshSamples", vbTextCompare) > 0 Then
+            b.Delete
+        End If
+    Next b
+    On Error GoTo 0
 
     ' Button: Create/Advance Availability (defensive: ignore if not available)
     Dim btn2 As Button
@@ -2535,11 +2606,8 @@ Private Sub EnsureDashboard()
     On Error GoTo 0
     If Not btn2 Is Nothing Then
         On Error Resume Next
-        btn2.Characters.Text = "Create/Advance Availability"
-        If Err.Number <> 0 Then
-            Err.Clear
-            ws.Shapes(btn2.Name).TextFrame.Characters.Text = "Create/Advance Availability"
-        End If
+        btn2.Caption = "Create/Advance Availability"
+        If Err.Number <> 0 Then Err.Clear: btn2.Characters.Text = "Create/Advance Availability"
         On Error GoTo 0
     End If
 
@@ -2563,11 +2631,8 @@ Private Sub EnsureDashboard()
     On Error GoTo 0
     If Not btn4 Is Nothing Then
         On Error Resume Next
-        btn4.Characters.Text = "Sanitize Raw + Build Insights"
-        If Err.Number <> 0 Then
-            Err.Clear
-            ws.Shapes(btn4.Name).TextFrame.Characters.Text = "Sanitize Raw + Build Insights"
-        End If
+        btn4.Caption = "Sanitize Raw + Build Insights"
+        If Err.Number <> 0 Then Err.Clear: btn4.Characters.Text = "Sanitize Raw + Build Insights"
         On Error GoTo 0
     End If
 
@@ -2589,13 +2654,15 @@ Private Sub EnsureDashboard()
     On Error GoTo 0
     If Not btn5 Is Nothing Then
         On Error Resume Next
-        btn5.Characters.Text = "Refresh Samples"
-        If Err.Number <> 0 Then
-            Err.Clear
-            ws.Shapes(btn5.Name).TextFrame.Characters.Text = "Refresh Samples"
-        End If
+        btn5.Caption = "Refresh Samples"
+        If Err.Number <> 0 Then Err.Clear: btn5.Characters.Text = "Refresh Samples"
         On Error GoTo 0
     End If
+End Sub
+
+Public Sub Dashboard_RepairButtons()
+    ' Quick entrypoint to rebuild Dashboard actions if buttons look generic
+    EnsureDashboard
 End Sub
 
 Private Function UniqueShapeName(ByVal ws As Worksheet, ByVal base As String) As String
@@ -3144,7 +3211,9 @@ Private Function GetRosterColumn(ByVal colName As String) As Variant
     On Error GoTo 0
     If lo Is Nothing Then Exit Function
     Dim idx As Long
-    On Error Resume Next: idx = lo.ListColumns(colName).Index: On Error GoTo 0
+    On Error Resume Next
+    idx = lo.ListColumns(colName).Index
+    On Error GoTo 0
     If idx = 0 Then Exit Function
     If lo.ListRows.Count = 0 Then Exit Function
     Dim arr() As Variant
@@ -3169,7 +3238,9 @@ Private Function EnsureConfig() As Worksheet
         If SheetExists("Config_Teams") Then
             Dim src As Worksheet: Set src = Worksheets("Config_Teams")
             Dim loSrc As ListObject
-            On Error Resume Next: Set loSrc = src.ListObjects("tblRoster"): On Error GoTo 0
+            On Error Resume Next
+            Set loSrc = src.ListObjects("tblRoster")
+            On Error GoTo 0
             Dim loDst As ListObject: Set loDst = EnsureRosterTable(cfg)
             If Not loSrc Is Nothing Then
                 If loSrc.ListRows.Count > 0 Then
@@ -3188,7 +3259,9 @@ Private Function EnsureConfig() As Worksheet
             Dim i As Long
             For i = LBound(namesArr) To UBound(namesArr)
                 Dim nm As Name
-                On Error Resume Next: Set nm = ThisWorkbook.Names(CStr(namesArr(i))): On Error GoTo 0
+                On Error Resume Next
+                Set nm = ThisWorkbook.Names(CStr(namesArr(i)))
+                On Error GoTo 0
                 If Not nm Is Nothing Then
                     Dim rowOff As Long: rowOff = 2 + i
                     Dim v As Variant, ref As String
@@ -3337,7 +3410,9 @@ Public Sub Jira_BuildSampleIssues()
     Call W(ws, r, Array("Release Steps", "FIINT-4071", 333071, "Story", "Done", #9/21/2025#, #10/15/2025#, #10/15/2025#, "2025.10.15", "EPIC-140", 3)): r = r + 1
     ws.Rows(1).Font.Bold = True
     Dim lo As ListObject
-    On Error Resume Next: Set lo = ws.ListObjects("tblJiraIssuesSample"): On Error GoTo 0
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblJiraIssuesSample")
+    On Error GoTo 0
     If Not lo Is Nothing Then lo.Delete
     Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range("A1").CurrentRegion, , xlYes)
     lo.Name = "tblJiraIssuesSample"
@@ -3369,7 +3444,9 @@ Private Sub Jira_CreatePivotsAndCharts()
     Dim wb As Workbook: Set wb = ThisWorkbook
     Dim srcWs As Worksheet: Set srcWs = EnsureSheet("Jira_Facts")
     Dim lo As ListObject
-    On Error Resume Next: Set lo = srcWs.ListObjects("tblJiraFacts"): On Error GoTo 0
+    On Error Resume Next
+    Set lo = srcWs.ListObjects("tblJiraFacts")
+    On Error GoTo 0
     If lo Is Nothing Or lo.ListRows.Count = 0 Then Err.Raise 1004, , "Jira_Facts empty"
 
     Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Insights")
@@ -3512,14 +3589,14 @@ Private Sub Jira_CreatePivotsAndCharts()
 
     ' Build pivots (Epic summary removed by request)
     Dim pc As PivotCache
-    ' Use external A1 address string for wider compatibility
-    Set pc = wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=lo.Range.Address(True, True, 1, True))
+    ' Build cache directly from the ListObject range to avoid address/host issues
+    Set pc = wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=lo.Range)
 
     ' Pivot 1 (renumbered): Story Point Distribution (rows SP, count issues)
     Dim pt2 As PivotTable
     Dim rowStart As Long
     rowStart = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 2
-    Set pt2 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:=UniquePivotName(ws, "ptSPDist"))
+    Set pt2 = pc.CreatePivotTable(TableDestination:=ws.Cells(rowStart, 1), TableName:=UniquePivotName(ws, "ptSPDist"))
     With pt2
         On Error Resume Next
         ' Layout so the row header shows the field name instead of "Row Labels"
@@ -3544,7 +3621,9 @@ Private Sub Jira_CreatePivotsAndCharts()
         .PivotFields("IssueKey").Function = xlCount
         If .DataFields.Count >= 1 Then .DataFields(1).Name = "Issue Count"
         ' Friendly caption for row field header
-        On Error Resume Next: pfSP.Caption = "Story Points": On Error GoTo 0
+        On Error Resume Next
+        pfSP.Caption = "Story Points"
+        On Error GoTo 0
         On Error GoTo 0
     End With
     Dim ch2 As ChartObject
@@ -3557,7 +3636,7 @@ Private Sub Jira_CreatePivotsAndCharts()
     ' Pivot 2: Quarter summary
     Dim pt3 As PivotTable
     rowStart = pt2.TableRange2.Row + pt2.TableRange2.Rows.Count + 2
-    Set pt3 = ws.PivotTables.Add(PivotCache:=pc, TableDestination:=ws.Cells(rowStart, 1), TableName:=UniquePivotName(ws, "ptQuarter"))
+    Set pt3 = pc.CreatePivotTable(TableDestination:=ws.Cells(rowStart, 1), TableName:=UniquePivotName(ws, "ptQuarter"))
     With pt3
         On Error Resume Next
         .PivotFields("QuarterTag").Orientation = xlRowField
@@ -3576,7 +3655,7 @@ Private Sub Jira_CreatePivotsAndCharts()
     Dim topBM As Long: topBM = NextFreeRow(ws)
     topBM = Jira_WriteBugMetrics_Sprint(lo, ws, topBM)
     topBM = Jira_WriteBugMetrics_Quarter(lo, ws, topBM + 2)
-    Flow_AppendChartsToSheet lo, ws
+    Flow_AppendChartsToSheet_EX lo, ws
     On Error GoTo 0
 End Sub
 
@@ -3928,7 +4007,7 @@ Public Sub SanitizeRawAndBuildInsights()
            Or StrComp(Replace$(Trim$(srcSheet), " ", "_"), "Raw_Data", vbTextCompare) = 0 _
            Or StrComp(Replace$(Trim$(srcSheet), "_", " "), "Raw Data", vbTextCompare) = 0 Then
             EnsureRawDataSheet
-            Set ws = ThisWorkbook.Worksheets("Raw_Data")
+            Set ws = EnsureSheet("Raw_Data")
         ElseIf StrComp(Trim$(srcSheet), "WIP_Facts", vbTextCompare) = 0 _
            Or StrComp(Replace$(Trim$(srcSheet), " ", "_"), "WIP_Facts", vbTextCompare) = 0 _
            Or StrComp(Replace$(Trim$(srcSheet), "_", " "), "WIP Facts", vbTextCompare) = 0 Then
@@ -3966,7 +4045,9 @@ Public Sub SanitizeRawAndBuildInsights()
 
     ' If the selected table looks like WIP (time-in-status), skip Jira normalization and build flow charts
     Dim loSrc As ListObject, isWip As Boolean
-    On Error Resume Next: Set loSrc = ws.ListObjects(srcTable): On Error GoTo 0
+    On Error Resume Next
+    Set loSrc = ws.ListObjects(srcTable)
+    On Error GoTo 0
     If Not loSrc Is Nothing Then
         isWip = Flow_HasColumn(loSrc, "TimeInTodo") Or Flow_HasColumn(loSrc, "TimeInProgress") Or _
                 Flow_HasColumn(loSrc, "TimeInTesting") Or Flow_HasColumn(loSrc, "TimeInReview")
@@ -3991,7 +4072,7 @@ Public Sub SanitizeRawAndBuildInsights()
         Else
             ' Not Jira-like, append Flow charts from the selected WIP-like table
             Dim wsJI As Worksheet: Set wsJI = EnsureSheet("Jira_Insights")
-            Flow_AppendChartsToSheet loSrc, wsJI
+            Flow_AppendChartsToSheet_EX loSrc, wsJI
         End If
     Else
         ' Normalize and build insights from selected sheet/table (Flow Metrics appended inside)
@@ -4044,7 +4125,9 @@ End Sub
 Private Sub EnsureSampleIssuesSheet()
     Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Issues_Sample")
     Dim lo As ListObject
-    On Error Resume Next: Set lo = ws.ListObjects("tblJiraIssuesSample"): On Error GoTo 0
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblJiraIssuesSample")
+    On Error GoTo 0
     If Not lo Is Nothing Then
         If lo.ListRows.Count >= 40 Then Exit Sub ' already populated
     End If
@@ -4111,7 +4194,9 @@ Private Sub EnsureSampleIssuesSheet()
     Next i
     ws.Rows(1).Font.Bold = True
     Set lo = Nothing
-    On Error Resume Next: Set lo = ws.ListObjects("tblJiraIssuesSample"): On Error GoTo 0
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblJiraIssuesSample")
+    On Error GoTo 0
     If Not lo Is Nothing Then lo.Delete
     Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range("A1").CurrentRegion, , xlYes)
     lo.Name = "tblJiraIssuesSample"
@@ -4121,7 +4206,9 @@ Private Sub EnsureRawSampleSheet()
     ' Create a verbose raw sheet simulating a Jira export with many columns
     Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Raw")
     Dim lo As ListObject
-    On Error Resume Next: Set lo = ws.ListObjects("tblJiraRaw"): On Error GoTo 0
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblJiraRaw")
+    On Error GoTo 0
     If Not lo Is Nothing Then
         If lo.ListRows.Count >= 40 Then Exit Sub
     End If
@@ -4200,7 +4287,9 @@ Private Sub EnsureRawSampleSheet()
         r = r + 1
     Next i
     ws.Rows(1).Font.Bold = True
-    On Error Resume Next: Set lo = ws.ListObjects("tblJiraRaw"): On Error GoTo 0
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblJiraRaw")
+    On Error GoTo 0
     If Not lo Is Nothing Then lo.Delete
     Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range("A1").CurrentRegion, , xlYes)
     lo.Name = "tblJiraRaw"
@@ -4214,7 +4303,9 @@ Private Sub EnsureRawDataSheet()
     ' Create a Raw_Data sheet including time-in-status durations and date-time fields
     Dim ws As Worksheet: Set ws = EnsureSheet("Raw_Data")
     Dim lo As ListObject
-    On Error Resume Next: Set lo = ws.ListObjects("tblRawData"): On Error GoTo 0
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblRawData")
+    On Error GoTo 0
     If Not lo Is Nothing Then
         If lo.ListRows.Count >= 40 Then Exit Sub
     End If
@@ -4290,7 +4381,9 @@ Private Sub EnsureRawDataSheet()
         r = r + 1
     Next i
     ws.Rows(1).Font.Bold = True
-    On Error Resume Next: Set lo = ws.ListObjects("tblRawData"): On Error GoTo 0
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblRawData")
+    On Error GoTo 0
     If Not lo Is Nothing Then lo.Delete
     Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range("A1").CurrentRegion, , xlYes)
     lo.Name = "tblRawData"
@@ -4305,7 +4398,9 @@ Public Sub Jira_NormalizeIssues(ByVal rawSheet As String, ByVal rawTable As Stri
 
     Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Facts")
     Dim lo As ListObject
-    On Error Resume Next: Set lo = ws.ListObjects("tblJiraFacts"): On Error GoTo 0
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblJiraFacts")
+    On Error GoTo 0
     If lo Is Nothing Then
         Dim headers As Variant
         headers = Array("IssueKey","Summary","IssueType","Status","Epic","Created","StartProgress","Resolved","StoryPoints","CycleDays","SprintSpan","IsCrossSprint","QuarterTag","YearTag","SprintTag","FixVersion","CreatedMonth","CycleCalDays","LeadCalDays")
@@ -4746,8 +4841,12 @@ Public Sub Jira_ApplyMetricsFromQuery()
     Set wsQ = Worksheets("Jira_Metrics")
     Set wsM = EnsureSheet("Metrics")
     Dim loQ As ListObject, loM As ListObject
-    On Error Resume Next: Set loQ = wsQ.ListObjects("tblJiraMetrics"): On Error GoTo 0
-    On Error Resume Next: Set loM = wsM.ListObjects("tblMetrics"): On Error GoTo 0
+    On Error Resume Next
+    Set loQ = wsQ.ListObjects("tblJiraMetrics")
+    On Error GoTo 0
+    On Error Resume Next
+    Set loM = wsM.ListObjects("tblMetrics")
+    On Error GoTo 0
     If loQ Is Nothing Or loM Is Nothing Then Exit Sub
 
     Dim dict As Object: Set dict = CreateObject("Scripting.Dictionary")
@@ -4777,7 +4876,9 @@ Private Sub MetricsApplyJiraForSprint(ByVal sStart As Date, ByVal sEnd As Date, 
     Dim ws As Worksheet
     Set ws = EnsureSheet("Metrics")
     Dim lo As ListObject
-    On Error Resume Next: Set lo = ws.ListObjects("tblMetrics"): On Error GoTo 0
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblMetrics")
+    On Error GoTo 0
     If lo Is Nothing Then Exit Sub
 
     Dim tag As String: tag = FormatSprintTag(sStart)
