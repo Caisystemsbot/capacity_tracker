@@ -7,6 +7,8 @@ Steps
 - Alt+F11 → Insert → Module → paste the contents of `src/modules/modCapacityPlanner.bas`.
 - Run `Bootstrap`.
 - Open sheet `Getting_Started` and follow the checklist:
+- Visit the `Dashboard` sheet; use the single "Create/Advance Availability" button to create the availability grid for the selected sprint.
+  - First run prompts: you'll enter a sprint start date (MM/DD/YYYY), then confirm the Sprint tag (a default is suggested). If you cancel the date, you'll be asked for Year/Quarter/Sprint instead. The tag is never assumed from the date, so you can label it as needed (e.g., S4).
 - Fill `Config_Teams` → `tblRoster` with your team. Columns:
   - `Member` (person’s name)
   - `Role` (dropdown: QA, Developer, Analyst, Squad Leader, Project Manager)
@@ -14,6 +16,12 @@ Steps
 - Only roles in `RolesWithVelocity` contribute to velocity by default (Developer, QA). `ContributesToVelocity` lets you override per person if needed.
   - Holidays/PTO are deferred in this minimal baseline and will be added later.
 - Run `HealthCheck` to validate structure.
+
+Jira metrics (optional, no tokens)
+- Set `JiraBaseUrl` (e.g., `https://your-domain.atlassian.net`) and `JiraBoardId` on `Config` (H10/H13).
+- Run `Jira_PopulateMetrics`. Excel prompts for auth on first run (Data Source credentials).
+- The `Jira_Metrics` sheet is populated and columns D/E in `Metrics` are updated (Completed/Committed).
+- For offline testing: import `data/jira_metrics_sample.csv` to a sheet named `Jira_Metrics` as table `tblJiraMetrics`, then run `Jira_ApplyMetricsFromQuery`.
 
 Named values (Config_Sprints H2:H8)
 - `ActiveTeam` — the team you’re working with.
