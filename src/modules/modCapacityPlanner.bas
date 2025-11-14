@@ -3683,7 +3683,7 @@ Private Function Jira_WriteSprintWorkAnalysis(ByVal lo As ListObject, ByVal ws A
     On Error GoTo Fail
     If lo Is Nothing Or ws Is Nothing Then Jira_WriteSprintWorkAnalysis = topRow: Exit Function
 
-    Dim idxTag As Long, idxSP As Long, idxC As Long, idxR As Long, idxEpic As Long
+    Dim idxTag As Long, idxSP As Long, idxC As Long, idxR As Long, idxEpic As Long, idxStatus As Long
     On Error Resume Next
     idxTag = lo.ListColumns("SprintTag").Index
     idxSP = lo.ListColumns("StoryPoints").Index
@@ -3691,6 +3691,7 @@ Private Function Jira_WriteSprintWorkAnalysis(ByVal lo As ListObject, ByVal ws A
     If idxEpic = 0 Then idxEpic = Flow_Col(lo, Array("epic","parent","parent link","parent key","epic link"))
     idxC = Flow_GetColIndex(lo, "Created")
     idxR = Flow_GetColIndex(lo, "Resolved")
+    idxStatus = lo.ListColumns("Status").Index
     On Error GoTo 0
     If idxSP = 0 Then Jira_WriteSprintWorkAnalysis = topRow: Exit Function
 
@@ -3703,10 +3704,16 @@ Private Function Jira_WriteSprintWorkAnalysis(ByVal lo As ListObject, ByVal ws A
     Dim epics As Object: Set epics = CreateObject("Scripting.Dictionary")
     Dim i As Long
     For i = 1 To lo.ListRows.Count
+        ' Only consider Done/Resolved items for Sprint Work Analysis
+        Dim isDone As Boolean: isDone = False
+        If idxR > 0 Then isDone = IsDate(lo.DataBodyRange.Cells(i, idxR).Value)
+        If (Not isDone) And idxStatus > 0 Then isDone = IsDoneStatus(CStr(lo.DataBodyRange.Cells(i, idxStatus).Value))
+        If Not isDone Then GoTo SkipCollect
         Dim tag As String
         If idxTag > 0 Then tag = CStr(lo.DataBodyRange.Cells(i, idxTag).Value)
         If Len(tag) = 0 Then
             Dim refD As Variant
+            ' Prefer resolved date for Done items; fall back to created
             If idxR > 0 Then refD = lo.DataBodyRange.Cells(i, idxR).Value
             If Not IsDate(refD) And idxC > 0 Then refD = lo.DataBodyRange.Cells(i, idxC).Value
             If IsDate(refD) Then tag = FormatSprintName(CDate(refD))
@@ -3716,6 +3723,7 @@ Private Function Jira_WriteSprintWorkAnalysis(ByVal lo As ListObject, ByVal ws A
         If idxEpic > 0 Then ep = CStr(lo.DataBodyRange.Cells(i, idxEpic).Value)
         If Len(Trim$(ep)) = 0 Then ep = "(No Epic)"
         epics(ep) = True
+SkipCollect:
     Next i
     If sprints.Count = 0 Or epics.Count = 0 Then Jira_WriteSprintWorkAnalysis = topRow: Exit Function
 
@@ -3746,6 +3754,11 @@ Private Function Jira_WriteSprintWorkAnalysis(ByVal lo As ListObject, ByVal ws A
     Dim pts As Object: Set pts = CreateObject("Scripting.Dictionary")
     Dim totalPts As Double: totalPts = 0
     For i = 1 To lo.ListRows.Count
+        ' Only count Done/Resolved items
+        Dim isDone2 As Boolean: isDone2 = False
+        If idxR > 0 Then isDone2 = IsDate(lo.DataBodyRange.Cells(i, idxR).Value)
+        If (Not isDone2) And idxStatus > 0 Then isDone2 = IsDoneStatus(CStr(lo.DataBodyRange.Cells(i, idxStatus).Value))
+        If Not isDone2 Then GoTo NextRow
         Dim e As String
         If idxEpic > 0 Then e = CStr(lo.DataBodyRange.Cells(i, idxEpic).Value)
         If Len(Trim$(e)) = 0 Then e = "(No Epic)"
@@ -3753,6 +3766,7 @@ Private Function Jira_WriteSprintWorkAnalysis(ByVal lo As ListObject, ByVal ws A
         If idxTag > 0 Then tg = CStr(lo.DataBodyRange.Cells(i, idxTag).Value)
         If Len(tg) = 0 Then
             Dim rd As Variant
+            ' Prefer resolved date for Done items; fall back to created
             If idxR > 0 Then rd = lo.DataBodyRange.Cells(i, idxR).Value
             If Not IsDate(rd) And idxC > 0 Then rd = lo.DataBodyRange.Cells(i, idxC).Value
             If IsDate(rd) Then tg = FormatSprintName(CDate(rd))
@@ -3914,6 +3928,20 @@ Private Sub Insights_FramePanel(ByVal ws As Worksheet, ByVal r1 As Long, ByVal c
         .Interior.Color = RGB(242, 242, 242)
     End With
 End Sub
+
+' Determine if a textual status indicates a completed item.
+Private Function IsDoneStatus(ByVal statusText As String) As Boolean
+    Dim u As String: u = LCase$(Trim$(statusText))
+    If Len(u) = 0 Then Exit Function
+    ' Common done-like terms from Jira exports
+    If InStr(u, "done") > 0 _
+       Or InStr(u, "closed") > 0 _
+       Or InStr(u, "resolved") > 0 _
+       Or InStr(u, "complete") > 0 _
+       Or InStr(u, "completed") > 0 Then
+        IsDoneStatus = True
+    End If
+End Function
 
 Private Sub WritePerPointTimeStats(ByVal lo As ListObject, ByVal dest As Range)
     Dim idxSP As Long, idxCycle As Long
