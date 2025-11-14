@@ -42,6 +42,7 @@ Private Const msoLineDash As Long = 4
 Private Const xlLine As Long = 4
 Private Const xlLineMarkers As Long = 65
 Private Const MOD_SIGNATURE As String = "modCapacityPlanner/Flow v2025-10-28.1908 series-guides"
+Private Const xlButtonControl As Long = 0
 
 ' Sprint tag coloring and span chart additions (2025-10-29)
 
@@ -2067,7 +2068,7 @@ End Function
 
 Private Sub SeedNamedValues()
     Dim ws As Worksheet: Set ws = EnsureConfig()
-    EnsureNamedValue "ActiveTeam", ws.Range("H2"), "CraicForce"
+    EnsureNamedValue "ActiveTeam", ws.Range("H2"), "Craicforce"
     EnsureNamedValue "TemplateVersion", ws.Range("H3"), "0.1.0"
     EnsureNamedValue "SprintLengthDays", ws.Range("H4"), 10
     EnsureNamedValue "DefaultHoursPerDay", ws.Range("H5"), 6.5
@@ -2077,12 +2078,13 @@ Private Sub SeedNamedValues()
     EnsureNamedValue "VerboseLogging", ws.Range("H9"), True
     ' Optional formatting for sprint tag names shown in charts/metrics
     ' Tokens: {YYYY},{YY},{Q},{S},{TEAM}
-    EnsureNamedValue "SprintNamePattern", ws.Range("H10"), "{YYYY} Q{Q} S{S}"
+    ' Default to team-style tag: Q{Q}.S{S}.{YY}.{TEAM} (e.g., Q4.S5.25.Craicforce)
+    EnsureNamedValue "SprintNamePattern", ws.Range("H10"), "Q{Q}.S{S}.{YY}.{TEAM}"
     ' Bug metrics (optional)
     EnsureNamedValue "BugCountBasis", ws.Range("H11"), "Both"  ' One of: Both/Created/Resolved
     EnsureNamedValue "BugIssueTypes", ws.Range("H12"), "Bug,Defect"
     ' Sprint parsing (optional): pattern and 2-digit year base
-    EnsureNamedValue "SprintParsePattern", ws.Range("H13"), GetNameValueOr("SprintNamePattern", "{YYYY} Q{Q} S{S}")
+    EnsureNamedValue "SprintParsePattern", ws.Range("H13"), GetNameValueOr("SprintNamePattern", "Q{Q}.S{S}.{YY}.{TEAM}")
     EnsureNamedValue "SprintYearBase", ws.Range("H14"), 2000
     ' Target points per sprint used by Sprint Work Analysis
     EnsureNamedValue "SRPEstimation", ws.Range("H15"), 35
@@ -2593,74 +2595,47 @@ Private Sub EnsureDashboard()
     Next b
     On Error GoTo 0
 
-    ' Button: Create/Advance Availability (defensive: ignore if not available)
-    Dim btn2 As Button
+    ' Button: Create/Advance Availability (use Form Control shape for reliable caption)
+    Dim s2 As Shape
     On Error Resume Next
-    Set btn2 = ws.Buttons.Add(Left:=20, Top:=80, Width:=240, Height:=28)
+    Set s2 = ws.Shapes.AddFormControl(Type:=xlButtonControl, Left:=20, Top:=80, Width:=240, Height:=28)
     On Error GoTo 0
-    On Error Resume Next
-    btn2.Name = UniqueShapeName(ws, "btnAdvanceAvailability")
-    On Error GoTo 0
-    Dim ao2 As String: ao2 = "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!CreateOrAdvanceAvailability"
-    On Error Resume Next
-    btn2.OnAction = ao2
-    If Err.Number <> 0 Then
-        Err.Clear
-        ws.Shapes(btn2.Name).OnAction = ao2
-    End If
-    On Error GoTo 0
-    If Not btn2 Is Nothing Then
+    If Not s2 Is Nothing Then
         On Error Resume Next
-        btn2.Caption = "Create/Advance Availability"
-        If Err.Number <> 0 Then Err.Clear: btn2.Characters.Text = "Create/Advance Availability"
+        s2.Name = UniqueShapeName(ws, "btnAdvanceAvailability")
+        Dim ao2 As String: ao2 = "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!CreateOrAdvanceAvailability"
+        s2.OnAction = ao2
+        s2.TextFrame.Characters.Text = "Create/Advance Availability"
         On Error GoTo 0
     End If
 
     ' (Removed) Build Jira Insights button; use Sanitize Raw + Build Insights instead
 
     ' Button: Sanitize Raw + Build Insights
-    Dim btn4 As Button
+    Dim s4 As Shape
     On Error Resume Next
-    Set btn4 = ws.Buttons.Add(Left:=20, Top:=120, Width:=240, Height:=28)
+    Set s4 = ws.Shapes.AddFormControl(Type:=xlButtonControl, Left:=20, Top:=120, Width:=240, Height:=28)
     On Error GoTo 0
-    On Error Resume Next
-    btn4.Name = UniqueShapeName(ws, "btnSanitizeRawAndBuild")
-    On Error GoTo 0
-    Dim ao4 As String: ao4 = "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!SanitizeRawAndBuildInsights"
-    On Error Resume Next
-    btn4.OnAction = ao4
-    If Err.Number <> 0 Then
-        Err.Clear
-        ws.Shapes(btn4.Name).OnAction = ao4
-    End If
-    On Error GoTo 0
-    If Not btn4 Is Nothing Then
+    If Not s4 Is Nothing Then
         On Error Resume Next
-        btn4.Caption = "Sanitize Raw + Build Insights"
-        If Err.Number <> 0 Then Err.Clear: btn4.Characters.Text = "Sanitize Raw + Build Insights"
+        s4.Name = UniqueShapeName(ws, "btnSanitizeRawAndBuild")
+        Dim ao4 As String: ao4 = "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!SanitizeRawAndBuildInsights"
+        s4.OnAction = ao4
+        s4.TextFrame.Characters.Text = "Sanitize Raw + Build Insights"
         On Error GoTo 0
     End If
 
     ' Button: Refresh Samples
-    Dim btn5 As Button
+    Dim s5 As Shape
     On Error Resume Next
-    Set btn5 = ws.Buttons.Add(Left:=20, Top:=200, Width:=240, Height:=28)
+    Set s5 = ws.Shapes.AddFormControl(Type:=xlButtonControl, Left:=20, Top:=200, Width:=240, Height:=28)
     On Error GoTo 0
-    On Error Resume Next
-    btn5.Name = UniqueShapeName(ws, "btnRefreshSamples")
-    On Error GoTo 0
-    Dim ao5 As String: ao5 = "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!RefreshSamples"
-    On Error Resume Next
-    btn5.OnAction = ao5
-    If Err.Number <> 0 Then
-        Err.Clear
-        ws.Shapes(btn5.Name).OnAction = ao5
-    End If
-    On Error GoTo 0
-    If Not btn5 Is Nothing Then
+    If Not s5 Is Nothing Then
         On Error Resume Next
-        btn5.Caption = "Refresh Samples"
-        If Err.Number <> 0 Then Err.Clear: btn5.Characters.Text = "Refresh Samples"
+        s5.Name = UniqueShapeName(ws, "btnRefreshSamples")
+        Dim ao5 As String: ao5 = "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!RefreshSamples"
+        s5.OnAction = ao5
+        s5.TextFrame.Characters.Text = "Refresh Samples"
         On Error GoTo 0
     End If
 End Sub
@@ -2944,6 +2919,24 @@ Private Function FormatSprintTagYQS(ByVal yr As Integer, ByVal q As Integer, ByV
     FormatSprintTagYQS = CStr(yr) & " Q" & CStr(q) & " S" & CStr(s)
 End Function
 
+' Build a sprint name string using the configured SprintNamePattern
+' but with an explicit Year/Quarter/Sprint (no date math assumptions).
+Private Function FormatSprintNameYQS(ByVal yr As Integer, ByVal q As Integer, ByVal s As Integer) As String
+    If q < 1 Then q = 1
+    If q > 4 Then q = 4
+    If s < 1 Then s = 1
+    If s > QuarterSprints(q) Then s = QuarterSprints(q)
+    Dim pat As String: pat = GetNameValueOr("SprintNamePattern", "Q{Q}.S{S}.{YY}.{TEAM}")
+    Dim team As String: team = GetNameValueOr("ActiveTeam", "Team")
+    Dim yy As String: yy = Right$(CStr(yr), 2)
+    pat = Replace$(pat, "{YYYY}", CStr(yr))
+    pat = Replace$(pat, "{YY}", yy)
+    pat = Replace$(pat, "{Q}", CStr(q))
+    pat = Replace$(pat, "{S}", CStr(s))
+    pat = Replace$(pat, "{TEAM}", team)
+    FormatSprintNameYQS = pat
+End Function
+
 ' Build a sprint tag string from a date using a pattern stored in name 'SprintNamePattern'.
 ' Tokens supported: {YYYY},{YY},{Q},{S},{TEAM}
 Private Function FormatSprintName(ByVal d As Date) As String
@@ -2955,7 +2948,7 @@ Private Function FormatSprintName(ByVal d As Date) As String
     Dim s As Integer: s = Int(daysFromQ / 14) + 1
     If s < 1 Then s = 1
     If s > QuarterSprints(q) Then s = QuarterSprints(q)
-    Dim pat As String: pat = GetNameValueOr("SprintNamePattern", "{YYYY} Q{Q} S{S}")
+    Dim pat As String: pat = GetNameValueOr("SprintNamePattern", "Q{Q}.S{S}.{YY}.{TEAM}")
     Dim team As String: team = GetNameValueOr("ActiveTeam", "Team")
     Dim yy As String: yy = Right$(CStr(yr), 2)
     pat = Replace$(pat, "{YYYY}", CStr(yr))
@@ -5172,9 +5165,8 @@ Private Sub EnsureRawDataSheet()
     On Error Resume Next
     Set lo = ws.ListObjects("tblRawData")
     On Error GoTo 0
-    If Not lo Is Nothing Then
-        If lo.ListRows.Count >= 40 Then Exit Sub
-    End If
+    ' Always rebuild the test data so the Sprint column reflects the current
+    ' SprintNamePattern (e.g., Q{Q}.S{S}.{YY}.{TEAM}) by default.
 
     ws.Cells.Clear
     Dim hdr As String
@@ -5182,7 +5174,7 @@ Private Sub EnsureRawDataSheet()
           "Created date|Start Progress|Updated date|Resolved date|" & _
           "Time In Todo|Time In Progress|Time In Testing|Time In Review|" & _
           "Fix Version/s|Component/s|Labels|" & _
-          "Parent|Custom field (Story Points)|URL"
+          "Parent|Custom field (Story Points)|URL|Sprint"
     Dim headers As Variant: headers = Split(hdr, "|")
 
     Dim i As Long
@@ -5199,27 +5191,68 @@ Private Sub EnsureRawDataSheet()
         Dim t As String, st As String, pri As String
         t = IIf(i Mod 10 = 0, "Bug", IIf(i Mod 5 = 0, "Task", "Story"))
         pri = Choose(((i Mod 3) + 1), "Medium","High","Low")
-        st = "Done"
+
+        ' Status cycles: To Do -> In Progress -> Validation -> Done
+        Select Case ((i - 1) Mod 4)
+            Case 0: st = "To Do"
+            Case 1: st = "In Progress"
+            Case 2: st = "Validation"
+            Case Else: st = "Done"
+        End Select
 
         ' Base created with time-of-day
         Dim created As Date: created = base + ((i - 1) * 2 Mod 70) + TimeSerial((i * 2) Mod 24, (i * 7) Mod 60, 0)
         Dim sp As Variant: sp = spPool(i - 1)
 
-        ' Time-in-status (days) â€” more realistic distribution to produce a wider CT range
+        ' Time-in-status (days) — tuned per status so unresolved rows end in their stage
         Dim tTodo As Double, tProg As Double, tTest As Double, tRev As Double
         Dim baseDays As Double
         baseDays = sp * 2 + ((i Mod 5) - 2) ' +/- 2 days variability
         If i Mod 12 = 0 Then baseDays = baseDays + sp ' occasional overrun
         If i Mod 11 = 0 Then baseDays = baseDays - sp ' occasional underrun
         If baseDays < 1 Then baseDays = 1
-        tTodo = Round(Application.WorksheetFunction.Max(0.5, baseDays * 0.05), 2)
-        tProg = Round(Application.WorksheetFunction.Max(0.5, baseDays * 0.7), 2)
-        tTest = Round(Application.WorksheetFunction.Max(0, baseDays * 0.15), 2)
-        tRev = Round(Application.WorksheetFunction.Max(0, baseDays * 0.10), 2)
 
-        Dim startProg As Date: startProg = created + tTodo
-        Dim updated As Date: updated = startProg + tProg
-        Dim resolved As Date: resolved = created + tTodo + tProg + tTest + tRev
+        Select Case st
+            Case "To Do"
+                tTodo = Round(Application.WorksheetFunction.Max(1, baseDays * 0.3), 2)
+                tProg = 0: tTest = 0: tRev = 0
+            Case "In Progress"
+                tTodo = Round(Application.WorksheetFunction.Max(0.5, baseDays * 0.15), 2)
+                tProg = Round(Application.WorksheetFunction.Max(1, baseDays * 0.6), 2)
+                tTest = 0: tRev = 0
+            Case "Validation"
+                tTodo = Round(Application.WorksheetFunction.Max(0.5, baseDays * 0.1), 2)
+                tProg = Round(Application.WorksheetFunction.Max(0.5, baseDays * 0.5), 2)
+                tTest = Round(Application.WorksheetFunction.Max(0.5, baseDays * 0.3), 2)
+                tRev = 0
+            Case Else ' Done
+                tTodo = Round(Application.WorksheetFunction.Max(0.5, baseDays * 0.05), 2)
+                tProg = Round(Application.WorksheetFunction.Max(0.5, baseDays * 0.7), 2)
+                tTest = Round(Application.WorksheetFunction.Max(0, baseDays * 0.15), 2)
+                tRev = Round(Application.WorksheetFunction.Max(0, baseDays * 0.10), 2)
+        End Select
+
+        Dim startProg As Variant, updated As Date, resolved As Variant
+        If tProg > 0 Or tTest > 0 Or tRev > 0 Then
+            startProg = created + tTodo
+        Else
+            startProg = Empty
+        End If
+        ' Updated reflects the current last stage date
+        If tRev > 0 Then
+            updated = (created + tTodo + tProg)
+        ElseIf tTest > 0 Then
+            updated = created + tTodo + tProg + tTest
+        ElseIf tProg > 0 Then
+            updated = created + tTodo + tProg
+        Else
+            updated = created + tTodo
+        End If
+        If st = "Done" Then
+            resolved = created + tTodo + tProg + tTest + tRev
+        Else
+            resolved = Empty
+        End If
 
         ' Write values
         ws.Cells(r, 1).Value = "Raw Item " & i
@@ -5238,12 +5271,42 @@ Private Sub EnsureRawDataSheet()
         ws.Cells(r,14).Value = tProg
         ws.Cells(r,15).Value = tTest
         ws.Cells(r,16).Value = tRev
-        ws.Cells(r,17).Value = Choose(((Month(created)-8) Mod 3)+1, "2025.09.23","2025.10.07","2025.10.21")
+        ' Only set Fix Version for Done items to emulate release tagging
+        If st = "Done" Then
+            ws.Cells(r,17).Value = Choose(((Month(created)-8) Mod 3)+1, "2025.09.23","2025.10.07","2025.10.21")
+        Else
+            ws.Cells(r,17).Value = ""
+        End If
         ws.Cells(r,18).Value = "Core"
         ws.Cells(r,19).Value = IIf(i Mod 4 = 0, "urgent", "")
         ws.Cells(r,20).Value = "EPIC-" & (100 + ((i - 1) Mod 6))
         ws.Cells(r,21).Value = sp
         ws.Cells(r,22).Value = "https://jira.example/browse/FIINT-" & CStr(5800 + i)
+        ' Compose a Jira-like Sprint membership string (most recent leftmost),
+        ' using the configured naming pattern. Include 1-3 sprints depending on span.
+        Dim sprintLenDays As Long: sprintLenDays = CLng(Val(GetNameValueOr("SprintLengthDays", "10")))
+        If sprintLenDays <= 0 Then sprintLenDays = 10
+        Dim totalDays As Double: totalDays = tTodo + tProg + tTest + tRev
+        Dim estSpan As Long: estSpan = Application.WorksheetFunction.Max(1, Application.WorksheetFunction.RoundUp(totalDays / sprintLenDays, 0))
+        Dim dRecent As Date
+        If IsDate(resolved) Then
+            dRecent = resolved
+        ElseIf tProg > 0 Or tTest > 0 Or tRev > 0 Then
+            dRecent = updated
+        Else
+            dRecent = created
+        End If
+        Dim sNow As String: sNow = FormatSprintName(dRecent)
+        Dim sList As String: sList = sNow
+        If estSpan >= 2 Then
+            Dim sPrev As String: sPrev = FormatSprintName(DateAdd("d", -14, dRecent))
+            If StrComp(sPrev, sNow, vbTextCompare) <> 0 Then sList = sList & ", " & sPrev
+        End If
+        If estSpan >= 3 Then
+            Dim sPrev2 As String: sPrev2 = FormatSprintName(DateAdd("d", -28, dRecent))
+            If InStr(1, sList, sPrev2, vbTextCompare) = 0 Then sList = sList & ", " & sPrev2
+        End If
+        ws.Cells(r,23).Value = sList
         r = r + 1
     Next i
     ws.Rows(1).Font.Bold = True
@@ -5254,6 +5317,76 @@ Private Sub EnsureRawDataSheet()
     Set lo = ws.ListObjects.Add(xlSrcRange, ws.Range("A1").CurrentRegion, , xlYes)
     lo.Name = "tblRawData"
 End Sub
+
+' Rewrite existing Sprint column values in Raw_Data!tblRawData to the current
+' SprintNamePattern (e.g., Q{Q}.S{S}.{YY}.{TEAM}) without regenerating the sheet.
+' Handles comma-separated sprint memberships by converting each token.
+Public Sub RawData_ConvertSprintColumnToPattern()
+    On Error GoTo Fail
+    Dim ws As Worksheet: Set ws = Worksheets("Raw_Data")
+    Dim lo As ListObject
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblRawData")
+    On Error GoTo 0
+    If lo Is Nothing Then Err.Raise 9, , "Table 'tblRawData' not found on Raw_Data"
+
+    Dim idx As Long
+    idx = Flow_Col(lo, Array("sprint","sprints","sprint name"))
+    If idx = 0 Then Err.Raise 9, , "Sprint column not found in tblRawData"
+
+    Dim r As Long
+    For r = 1 To lo.ListRows.Count
+        Dim raw As String: raw = CStr(lo.DataBodyRange.Cells(r, idx).Value)
+        If Len(Trim$(raw)) = 0 Then GoTo NextR
+        Dim parts As Variant: parts = Split(raw, ",")
+        Dim out As String: out = ""
+        Dim p As Long, token As String, outTok As String
+        Dim y As Integer, q As Integer, s As Integer
+        For p = LBound(parts) To UBound(parts)
+            token = Trim$(CStr(parts(p)))
+            outTok = token
+            If ParseSprintTagByPattern(token, y, q, s) Then
+                outTok = FormatSprintNameYQS(y, q, s)
+            ElseIf TryParseYQS_Legacy(token, y, q, s) Then
+                outTok = FormatSprintNameYQS(y, q, s)
+            End If
+            If Len(out) > 0 Then out = out & ", "
+            out = out & outTok
+        Next p
+        lo.DataBodyRange.Cells(r, idx).Value = out
+NextR:
+    Next r
+    If IsVerbose() Then MsgBox "Sprint column rewritten to current pattern.", vbInformation
+    Exit Sub
+Fail:
+    MsgBox "Failed to convert Sprint column: " & Err.Description, vbExclamation
+End Sub
+
+Private Function TryParseYQS_Legacy(ByVal s As String, ByRef y As Integer, ByRef q As Integer, ByRef spr As Integer) As Boolean
+    On Error GoTo Fail
+    Dim u As String: u = UCase$(Trim$(s))
+    y = 0: q = 0: spr = 0
+    ' Find a 4-digit year anywhere in the token
+    Dim i As Long
+    For i = 1 To Len(u) - 3
+        If Mid$(u, i, 1) Like "[0-9]" _
+           And Mid$(u, i + 1, 1) Like "[0-9]" _
+           And Mid$(u, i + 2, 1) Like "[0-9]" _
+           And Mid$(u, i + 3, 1) Like "[0-9]" Then
+            y = CInt(Mid$(u, i, 4))
+            Exit For
+        End If
+    Next i
+    ' Extract Qn and Sn anywhere in the token
+    Dim posQ As Long: posQ = InStr(1, u, "Q")
+    Dim posS As Long: posS = InStr(1, u, "S")
+    If posQ > 0 Then q = Val(Mid$(u, posQ + 1))
+    If posS > 0 Then spr = Val(Mid$(u, posS + 1))
+    If y > 0 And q > 0 And spr > 0 Then TryParseYQS_Legacy = True
+    Exit Function
+Fail:
+    TryParseYQS_Legacy = False
+End Function
 
 Public Sub Jira_NormalizeIssues(ByVal rawSheet As String, ByVal rawTable As String)
     On Error GoTo Fail
@@ -5301,8 +5434,23 @@ Public Sub Jira_NormalizeIssues(ByVal rawSheet As String, ByVal rawTable As Stri
         Dim refDate As Date: refDate = IIf(resolved = 0, created, resolved)
         out.Range(1, 13).Value = Year(refDate) & " Q" & Int((Month(refDate) - 1) / 3 + 1)
         out.Range(1, 14).Value = Year(refDate)
-        ' SprintTag based on refDate (resolved if present else created)
-        out.Range(1, 15).Value = FormatSprintName(refDate)
+        ' SprintTag: prefer explicit Jira "Sprint" column (most-recent leftmost),
+        ' falling back to date-derived pattern when not available or unparsable.
+        Dim sprintText As String: sprintText = GetCellBy(loRaw, r, map, "Sprint")
+        Dim sprintTagOut As String
+        If Len(Trim$(sprintText)) > 0 Then
+            Dim partsSp As Variant: partsSp = Split(sprintText, ",")
+            Dim newest As String: newest = Trim$(partsSp(0)) ' leftmost = most recent
+            Dim ySp As Integer, qSp As Integer, sSp As Integer
+            If ParseSprintTagByPattern(newest, ySp, qSp, sSp) Then
+                sprintTagOut = FormatSprintNameYQS(ySp, qSp, sSp)
+            Else
+                sprintTagOut = newest
+            End If
+        Else
+            sprintTagOut = FormatSprintName(refDate)
+        End If
+        out.Range(1, 15).Value = sprintTagOut
         ' FixVersion and CreatedMonth
         out.Range(1, 16).Value = GetCellBy(loRaw, r, map, "FixVersion")
         If created <> 0 Then out.Range(1, 17).Value = DateSerial(Year(created), Month(created), 1)

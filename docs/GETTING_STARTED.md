@@ -23,14 +23,22 @@ Jira metrics (optional, no tokens)
 - The `Jira_Metrics` sheet is populated and columns D/E in `Metrics` are updated (Completed/Committed).
 - For offline testing: import `data/jira_metrics_sample.csv` to a sheet named `Jira_Metrics` as table `tblJiraMetrics`, then run `Jira_ApplyMetricsFromQuery`.
 
+Insights build
+- Use the Dashboard button "Sanitize Raw + Build Insights" (or run `SanitizeRawAndBuildInsights`) to normalize issues and update `Jira_Insights`.
+- The Insights sheet includes:
+  - A compact Sprint Work Analysis and cycle-time stats by Story Points.
+  - Flow charts (Sprint Spans, Throughput) appended in-place.
+  - Epic Burndown (top N): multi-series line chart of daily remaining Story Points for the top epics by total SP.
+
 Named values (Config_Sprints H2:H8)
 - `ActiveTeam` — the team you’re working with.
 - `TemplateVersion` — informational.
 - `SprintLengthDays` — default sprint length in working days.
 - `DefaultHoursPerDay` — baseline daily hours per person.
-- `DefaultAllocationPct` — fraction of daily hours allocated to sprint work.
-- `DefaultHoursPerPoint` — hours-to-points conversion.
-- `RolesWithVelocity` — comma-separated roles that count toward velocity (defaults to Developer, QA).
+- `DefaultAllocationPct` - fraction of daily hours allocated to sprint work.
+- `DefaultHoursPerPoint` - hours-to-points conversion.
+- `RolesWithVelocity` - comma-separated roles that count toward velocity (defaults to Developer, QA).
+- `SprintNamePattern` - sprint tag format tokens (`{YYYY}`, `{YY}`, `{Q}`, `{S}`, `{TEAM}`); defaults to `Q{Q}.S{S}.{YY}.{TEAM}` (e.g., `Q4.S5.25.Craicforce`).
 
 Next
 - Keep working from the `Getting_Started` checklist until your roster and calendars are ready.
