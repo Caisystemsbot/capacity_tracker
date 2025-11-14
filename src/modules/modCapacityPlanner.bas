@@ -5,6 +5,8 @@
 ' Toggle Flow sections while stabilizing: 0=disabled, 1=enabled
 #Const FLOW_ENABLE_WIP = 0
 #Const FLOW_ENABLE_SCATTER = 0
+' Temporarily disable Epic Burndown features (set to 1 to re-enable)
+#Const ENABLE_EPIC_BURNDOWN = 0
 
 ' Runtime flag mirrors to avoid conditional-compilation inside procedures
 Private Const CFG_FLOW_ENABLE_WIP As Boolean = False
@@ -3658,10 +3660,15 @@ Private Sub Jira_CreatePivotsAndCharts()
 
     ' Append Flow Metrics onto Jira_Insights (consolidated view; no separate tab)
     On Error Resume Next
-    ' Insert Bug Metrics (Sprint and Quarter) before appending Flow charts
+    ' Insert Bug Metrics (Sprint and Quarter), Epic Burndown, then append Flow charts
     Dim topBM As Long: topBM = NextFreeRow(ws)
     topBM = Jira_WriteBugMetrics_Sprint(lo, ws, topBM)
     topBM = Jira_WriteBugMetrics_Quarter(lo, ws, topBM + 2)
+    ' Epic Burndown is temporarily disabled
+#If ENABLE_EPIC_BURNDOWN Then
+    Dim topEB As Long: topEB = NextFreeRow(ws)
+    topEB = Jira_WriteEpicBurndown_BySprint(lo, ws, topEB, 10)
+#End If
     Flow_AppendChartsToSheet_EX lo, ws
     On Error GoTo 0
 End Sub
@@ -4190,6 +4197,625 @@ Private Function Jira_WriteBugMetrics_Quarter(ByVal lo As ListObject, ByVal ws A
 Fail:
     Jira_WriteBugMetrics_Quarter = topRow
 End Function
+
+' -------------------- Epic Burndown (daily, simple) --------------------
+
+#If ENABLE_EPIC_BURNDOWN Then
+' Epic Burndown features are gated by ENABLE_EPIC_BURNDOWN for stability.
+' Public helper: prompts for an epic and appends a burndown to Jira_Insights
+Public Sub Jira_AddEpicBurndown()
+    On Error GoTo Fail
+    LogStart "Jira_AddEpicBurndown"
+    Dim lo As ListObject: Set lo = Flow_FindFactsTable()
+    If lo Is Nothing Then Err.Raise 1004, , "Could not find Jira facts (Created/Resolved/StoryPoints/Epic)."
+    Dim ws As Worksheet: Set ws = EnsureSheet("Jira_Insights")
+    Dim topRow As Long: topRow = NextFreeRow(ws)
+    Call Jira_WriteEpicBurndown(lo, ws, topRow)
+    LogOk "Jira_AddEpicBurndown"
+    Exit Sub
+Fail:
+    LogErr "Jira_AddEpicBurndown", "Err " & Err.Number & ": " & Err.Description
+    If IsVerbose() Then MsgBox "Epic Burndown failed: " & Err.Description, vbExclamation
+End Sub
+
+' Compute and write a daily Epic Burndown block and line chart.
+' Returns the next free row after the section. If epicName is omitted, prompts with a best-effort default.
+Private Function Jira_WriteEpicBurndown(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long, Optional ByVal epicName As String = "") As Long
+    On Error GoTo Fail
+    If lo Is Nothing Or ws Is Nothing Then Jira_WriteEpicBurndown = topRow: Exit Function
+
+    ' Locate required columns
+    Dim idxEpic As Long, idxSP As Long, idxC As Long, idxR As Long
+    On Error Resume Next
+    idxEpic = lo.ListColumns("Epic").Index
+    If idxEpic = 0 Then idxEpic = Flow_Col(lo, Array("epic","parent","parent link","parent key","epic link"))
+    idxSP = lo.ListColumns("StoryPoints").Index
+    idxC = Flow_GetColIndex(lo, "Created")
+    idxR = Flow_GetColIndex(lo, "Resolved")
+    On Error GoTo 0
+    If idxEpic = 0 Or idxSP = 0 Or idxC = 0 Then Jira_WriteEpicBurndown = topRow: Exit Function
+
+    ' Scan epics and suggest a default (max StoryPoints)
+    Dim totals As Object: Set totals = CreateObject("Scripting.Dictionary")
+    Dim i As Long
+    For i = 1 To lo.ListRows.Count
+        Dim ep As String: ep = CStr(lo.DataBodyRange.Cells(i, idxEpic).Value)
+        If Len(Trim$(ep)) = 0 Then ep = "(No Epic)"
+        Dim sp As Double: sp = Val(lo.DataBodyRange.Cells(i, idxSP).Value)
+        If sp > 0 Then
+            If Not totals.Exists(ep) Then totals(ep) = 0#
+            totals(ep) = CDbl(totals(ep)) + sp
+        End If
+    Next i
+    If totals.Count = 0 Then Jira_WriteEpicBurndown = topRow: Exit Function
+
+    Dim defEpic As String: defEpic = ""
+    Dim mx As Double: mx = -1
+    Dim k As Variant
+    For Each k In totals.Keys
+        If CDbl(totals(k)) > mx Then mx = CDbl(totals(k)): defEpic = CStr(k)
+    Next k
+    If Len(Trim$(epicName)) = 0 Then
+        Dim prompt As String
+        prompt = "Enter Epic (Parent) name for burndown:" & vbCrLf & _
+                 "Default: " & defEpic
+        Dim inp As String
+        inp = InputBox(prompt, "Epic Burndown", defEpic)
+        If Len(Trim$(inp)) > 0 Then epicName = Trim$(inp) Else epicName = defEpic
+    End If
+
+    ' Collect items for the selected epic
+    Dim n As Long: n = 0
+    Dim cDates() As Date, rDates() As Date, sps() As Double
+    Dim created As Variant, resolved As Variant, spv As Double, epNow As String
+    For i = 1 To lo.ListRows.Count
+        epNow = CStr(lo.DataBodyRange.Cells(i, idxEpic).Value)
+        If Len(Trim$(epNow)) = 0 Then epNow = "(No Epic)"
+        If StrComp(Trim$(epNow), Trim$(epicName), vbTextCompare) = 0 Then
+            spv = Val(lo.DataBodyRange.Cells(i, idxSP).Value)
+            created = lo.DataBodyRange.Cells(i, idxC).Value
+            If spv > 0 And IsDate(created) Then
+                n = n + 1
+                ReDim Preserve cDates(1 To n)
+                ReDim Preserve rDates(1 To n)
+                ReDim Preserve sps(1 To n)
+                cDates(n) = DateSerial(Year(created), Month(created), Day(created))
+                If idxR > 0 Then
+                    resolved = lo.DataBodyRange.Cells(i, idxR).Value
+                    If IsDate(resolved) Then rDates(n) = DateSerial(Year(resolved), Month(resolved), Day(resolved)) Else rDates(n) = 0
+                Else
+                    rDates(n) = 0
+                End If
+                sps(n) = spv
+            End If
+        End If
+    Next i
+    If n = 0 Then
+        ws.Cells(topRow, 1).Value = "Epic Burndown - " & epicName
+        ws.Cells(topRow + 1, 1).Value = "(No items with StoryPoints found for this epic)"
+        Jira_WriteEpicBurndown = topRow + 3
+        Exit Function
+    End If
+
+    ' Determine date range
+    Dim minD As Date, maxD As Date, hasUnresolved As Boolean
+    Dim j As Long
+    minD = cDates(1): maxD = cDates(1)
+    For j = 1 To n
+        If cDates(j) < minD Then minD = cDates(j)
+        If rDates(j) <> 0 Then
+            If rDates(j) > maxD Then maxD = rDates(j)
+        Else
+            hasUnresolved = True
+        End If
+        If cDates(j) > maxD Then maxD = cDates(j)
+    Next j
+    If hasUnresolved Then If Date > maxD Then maxD = Date
+
+    ' Write header and columns
+    ws.Cells(topRow, 1).Value = "Epic Burndown - " & epicName
+    ws.Cells(topRow, 1).Font.Bold = True
+    ws.Cells(topRow + 1, 1).Resize(1, 2).Value = Array("Date", "RemainingSP")
+    ws.Cells(topRow + 1, 1).Resize(1, 2).Font.Bold = True
+
+    ' Daily series
+    Dim row As Long: row = topRow + 2
+    Dim d As Date
+    For d = minD To maxD
+        Dim scope As Double: scope = 0#
+        Dim done As Double: done = 0#
+        For j = 1 To n
+            If cDates(j) <= d Then scope = scope + sps(j)
+            If rDates(j) <> 0 And rDates(j) <= d Then done = done + sps(j)
+        Next j
+        ws.Cells(row, 1).Value = d
+        ws.Cells(row, 2).Value = Application.WorksheetFunction.Max(0, scope - done)
+        row = row + 1
+    Next d
+
+    ' Build chart and frame
+    Call Jira_MakeEpicBurndown_Chart(ws, topRow)
+    Dim lastRow As Long: lastRow = row - 1
+    ws.Columns("A:C").AutoFit
+    Insights_FramePanel ws, topRow, 1, lastRow, 2
+    Jira_WriteEpicBurndown = lastRow + 2
+    Exit Function
+Fail:
+    Jira_WriteEpicBurndown = topRow
+End Function
+
+Private Sub Jira_MakeEpicBurndown_Chart(ByVal ws As Worksheet, ByVal topRow As Long)
+    On Error GoTo Fail
+    Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
+    If lastRow <= hdr.Row + 1 Then Exit Sub
+
+    Dim ch As ChartObject
+    Set ch = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(topRow, 1).Top, Width:=520, Height:=280)
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartType = xlLine
+    On Error Resume Next
+    ch.Chart.ChartTitle.Text = CStr(ws.Cells(topRow, 1).Value)
+    On Error GoTo 0
+
+    With ch.Chart.SeriesCollection.NewSeries
+        .Name = "Remaining SP"
+        .XValues = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+        .Values = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + 1), ws.Cells(lastRow, hdr.Column + 1))
+        .ChartType = xlLine
+    End With
+
+    ' Axes formatting and gridlines
+    Dim yMax As Double
+    yMax = 0
+    Dim r As Long
+    For r = hdr.Row + 1 To lastRow
+        Dim v As Double: v = Val(ws.Cells(r, hdr.Column + 1).Value)
+        If v > yMax Then yMax = v
+    Next r
+    yMax = Flow_NiceCeiling(yMax, 1)
+    If yMax < 3 Then yMax = 3
+    On Error Resume Next
+    With ch.Chart.Axes(1)
+        .MinimumScale = CDbl(ws.Cells(hdr.Row + 1, hdr.Column).Value)
+        .MaximumScale = CDbl(ws.Cells(lastRow, hdr.Column).Value)
+    End With
+    With ch.Chart.Axes(2)
+        .MinimumScale = 0
+        .MaximumScale = yMax
+        .HasMajorGridlines = True
+        .MajorUnit = Flow_NiceMajorUnit(yMax)
+    End With
+    On Error GoTo 0
+    Exit Sub
+Fail:
+End Sub
+
+' Compute and write a multi-epic burndown (top N epics by StoryPoints).
+' Returns the next free row after the section. Appends a data block:
+'   Date | Epic1 | Epic2 | ...
+' and builds a multi-series line chart titled "Epic Burndown (top N)".
+Private Function Jira_WriteEpicBurndown_BySprint(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long, Optional ByVal maxEpics As Long = 10) As Long
+    On Error GoTo Fail
+    Jira_WriteEpicBurndown_BySprint = topRow
+    If lo Is Nothing Or ws Is Nothing Then Exit Function
+
+    ' Required columns
+    Dim idxEpic As Long, idxSP As Long, idxC As Long, idxR As Long, idxTag As Long
+    On Error Resume Next
+    idxEpic = lo.ListColumns("Epic").Index
+    If idxEpic = 0 Then idxEpic = Flow_Col(lo, Array("epic", "parent", "parent link", "parent key", "epic link"))
+    idxSP = lo.ListColumns("StoryPoints").Index
+    idxC = Flow_GetColIndex(lo, "Created")
+    idxR = Flow_GetColIndex(lo, "Resolved")
+    idxTag = lo.ListColumns("SprintTag").Index
+    On Error GoTo 0
+    If idxEpic = 0 Or idxSP = 0 Or idxC = 0 Then Exit Function
+
+    ' Read source columns into arrays for performance
+    Dim nRows As Long: nRows = lo.ListRows.Count
+    If nRows = 0 Then Exit Function
+    Dim arrEpic As Variant, arrSP As Variant, arrC As Variant, arrR As Variant, arrTag As Variant
+    arrEpic = lo.DataBodyRange.Columns(idxEpic).Value
+    arrSP = lo.DataBodyRange.Columns(idxSP).Value
+    arrC = lo.DataBodyRange.Columns(idxC).Value
+    If idxR > 0 Then arrR = lo.DataBodyRange.Columns(idxR).Value
+    If idxTag > 0 Then arrTag = lo.DataBodyRange.Columns(idxTag).Value
+
+    ' Sum StoryPoints by Epic to identify top N
+    Dim totals As Object: Set totals = CreateObject("Scripting.Dictionary")
+    Dim i As Long
+    Dim ep As String, sp As Double
+    Dim cVar As Variant
+    For i = 1 To nRows
+        ep = CStr(arrEpic(i, 1))
+        If Len(Trim$(ep)) = 0 Then ep = "(No Epic)"
+        sp = Val(arrSP(i, 1))
+        cVar = arrC(i, 1)
+        If sp > 0 And IsDate(cVar) Then
+            If Not totals.Exists(ep) Then totals(ep) = 0#
+            totals(ep) = CDbl(totals(ep)) + sp
+        End If
+    Next i
+    If totals.Count = 0 Then Exit Function
+
+    ' Pick top N epics by total SP
+    Dim epicKeys() As Variant
+    epicKeys = totals.Keys
+    Dim a As Long, b As Long
+    For a = LBound(epicKeys) To UBound(epicKeys) - 1
+        For b = a + 1 To UBound(epicKeys)
+            If CDbl(totals(epicKeys(b))) > CDbl(totals(epicKeys(a))) Then
+                Dim tmpEpic As Variant
+                tmpEpic = epicKeys(a): epicKeys(a) = epicKeys(b): epicKeys(b) = tmpEpic
+            End If
+        Next b
+    Next a
+    Dim m As Long
+    m = UBound(epicKeys) - LBound(epicKeys) + 1
+    If maxEpics <= 0 Then maxEpics = 10
+    If m > maxEpics Then m = maxEpics
+    If m <= 0 Then Exit Function
+
+    ' Copy selected epic names
+    Dim epics() As String
+    ReDim epics(1 To m)
+    For a = 1 To m
+        epics(a) = CStr(epicKeys(LBound(epicKeys) + a - 1))
+    Next a
+
+    ' Collect sprint tags (prefer SprintTag; else derive from Resolved/Created)
+    Dim seenSprints As Object: Set seenSprints = CreateObject("Scripting.Dictionary")
+    Dim tagVal As String
+    For i = 1 To nRows
+        tagVal = ""
+        If idxTag > 0 Then tagVal = CStr(arrTag(i, 1))
+        If Len(tagVal) = 0 Then
+            Dim refD As Variant: refD = Empty
+            If idxR > 0 Then refD = arrR(i, 1)
+            If Not IsDate(refD) Then refD = arrC(i, 1)
+            If IsDate(refD) Then tagVal = FormatSprintName(CDate(refD))
+        End If
+        If Len(tagVal) > 0 Then seenSprints(tagVal) = True
+    Next i
+    If seenSprints.Count = 0 Then Exit Function
+
+    ' Filter to sprints that parse and sort by Y/Q/S
+    Dim sprKeys() As Variant
+    sprKeys = seenSprints.Keys
+    Dim y1 As Integer, q1 As Integer, s1 As Integer
+    Dim y2 As Integer, q2 As Integer, s2 As Integer
+    Dim ok1 As Boolean, ok2 As Boolean
+    ' Temporary swap holder for sorting sprint keys
+    Dim tmpSpr As Variant
+    For a = LBound(sprKeys) To UBound(sprKeys) - 1
+        For b = a + 1 To UBound(sprKeys)
+            ok1 = ParseSprintTagByPattern(CStr(sprKeys(a)), y1, q1, s1)
+            ok2 = ParseSprintTagByPattern(CStr(sprKeys(b)), y2, q2, s2)
+            Dim doSwap As Boolean: doSwap = False
+            If ok1 And ok2 Then
+                If (y2 > y1) Or (y2 = y1 And q2 > q1) Or (y2 = y1 And q2 = q1 And s2 > s1) Then doSwap = True
+            ElseIf (Not ok1) And ok2 Then
+                doSwap = True
+            End If
+            If doSwap Then
+                tmpSpr = sprKeys(a): sprKeys(a) = sprKeys(b): sprKeys(b) = tmpSpr
+            End If
+        Next b
+    Next a
+
+    ' Title and headers
+    ws.Cells(topRow, 1).Value = "Epic Burndown by Sprint (top " & CStr(m) & ")"
+    ws.Cells(topRow, 1).Font.Bold = True
+    ws.Cells(topRow + 1, 1).Value = "SprintTag"
+    For a = 1 To m
+        ws.Cells(topRow + 1, 1 + a).Value = epics(a)
+    Next a
+    ws.Range(ws.Cells(topRow + 1, 1), ws.Cells(topRow + 1, 1 + m)).Font.Bold = True
+
+    ' Rows per sprint: remaining SP per epic at sprint end
+    Dim writeRow As Long: writeRow = topRow + 2
+    Dim sprIdx As Long
+    Dim sEnd As Date
+    Dim spScope As Double, spDone As Double
+    Dim sTag As String
+    For sprIdx = LBound(sprKeys) To UBound(sprKeys)
+        sTag = CStr(sprKeys(sprIdx))
+        If ParseSprintTagByPattern(sTag, y1, q1, s1) Then
+            sEnd = DateAdd("d", 13, QuarterStartDate(y1, q1) + (s1 - 1) * 14)
+            ws.Cells(writeRow, 1).Value = sTag
+            For a = 1 To m
+                spScope = 0#: spDone = 0#
+                For i = 1 To nRows
+                    Dim epNow As String
+                    epNow = CStr(arrEpic(i, 1))
+                    If Len(Trim$(epNow)) = 0 Then epNow = "(No Epic)"
+                    If StrComp(epNow, epics(a), vbTextCompare) = 0 Then
+                        Dim spv As Double: spv = Val(arrSP(i, 1))
+                        If spv > 0 Then
+                            Dim cDateVar As Variant: cDateVar = arrC(i, 1)
+                            If IsDate(cDateVar) Then
+                                Dim dtC As Date: dtC = CDate(cDateVar)
+                                If dtC <= sEnd Then spScope = spScope + spv
+                                If idxR > 0 Then
+                                    Dim rDateVar As Variant: rDateVar = arrR(i, 1)
+                                    If IsDate(rDateVar) Then
+                                        Dim dtR As Date: dtR = CDate(rDateVar)
+                                        If dtR <= sEnd Then spDone = spDone + spv
+                                    End If
+                                End If
+                            End If
+                        End If
+                    End If
+                Next i
+                ws.Cells(writeRow, 1 + a).Value = Application.WorksheetFunction.Max(0, spScope - spDone)
+            Next a
+            writeRow = writeRow + 1
+        End If
+    Next sprIdx
+
+    ' Build multi-series chart
+    Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, hdr.Column).End(xlUp).Row
+    If lastRow <= hdr.Row + 1 Then Jira_WriteEpicBurndown_BySprint = topRow: Exit Function
+
+    Dim ch As ChartObject
+    Set ch = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(topRow, 1).Top, Width:=520, Height:=280)
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartType = xlLine
+    On Error Resume Next
+    ch.Chart.ChartTitle.Text = CStr(ws.Cells(topRow, 1).Value)
+    On Error GoTo 0
+
+    For a = 1 To m
+        With ch.Chart.SeriesCollection.NewSeries
+            .Name = epics(a)
+            .XValues = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+            .Values = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + a), ws.Cells(lastRow, hdr.Column + a))
+            .ChartType = xlLine
+        End With
+    Next a
+
+    ' Y axis scaling and gridlines
+    Dim yMax As Double: yMax = 0
+    Dim r As Long
+    For r = hdr.Row + 1 To lastRow
+        For a = 1 To m
+            Dim v As Double: v = Val(ws.Cells(r, hdr.Column + a).Value)
+            If v > yMax Then yMax = v
+        Next a
+    Next r
+    Dim yMaxScale As Double: yMaxScale = Flow_NiceCeiling(Application.WorksheetFunction.Max(yMax, 3), 1)
+    On Error Resume Next
+    ch.Chart.Axes(2).MinimumScale = 0
+    ch.Chart.Axes(2).MaximumScale = yMaxScale
+    ch.Chart.Axes(2).HasMajorGridlines = True
+    ch.Chart.Axes(2).MajorUnit = Flow_NiceMajorUnit(yMaxScale)
+    ch.Chart.Axes(1).HasMajorGridlines = False
+    On Error GoTo 0
+
+    ' Frame panel and return next row
+    Dim lastCol As Long: lastCol = m + 1
+    Insights_FramePanel ws, topRow, 1, lastRow, lastCol
+    Jira_WriteEpicBurndown_BySprint = lastRow + 2
+    Exit Function
+Fail:
+    Jira_WriteEpicBurndown_BySprint = topRow
+End Function
+
+Private Function Jira_WriteEpicBurndown_All(ByVal lo As ListObject, ByVal ws As Worksheet, ByVal topRow As Long, Optional ByVal maxEpics As Long = 10) As Long
+    On Error GoTo Fail
+    Jira_WriteEpicBurndown_All = topRow
+    If lo Is Nothing Or ws Is Nothing Then Exit Function
+
+    ' Required columns
+    Dim idxEpic As Long, idxSP As Long, idxC As Long, idxR As Long
+    On Error Resume Next
+    idxEpic = lo.ListColumns("Epic").Index
+    If idxEpic = 0 Then idxEpic = Flow_Col(lo, Array("epic","parent","parent link","parent key","epic link"))
+    idxSP = lo.ListColumns("StoryPoints").Index
+    idxC = Flow_GetColIndex(lo, "Created")
+    idxR = Flow_GetColIndex(lo, "Resolved")
+    On Error GoTo 0
+    If idxEpic = 0 Or idxSP = 0 Or idxC = 0 Then Exit Function
+
+    ' Read source columns into arrays for performance
+    Dim nRows As Long: nRows = lo.ListRows.Count
+    Dim arrEpic As Variant, arrSP As Variant, arrC As Variant, arrR As Variant
+    arrEpic = lo.DataBodyRange.Columns(idxEpic).Value
+    arrSP = lo.DataBodyRange.Columns(idxSP).Value
+    arrC = lo.DataBodyRange.Columns(idxC).Value
+    If idxR > 0 Then arrR = lo.DataBodyRange.Columns(idxR).Value
+    
+    ' Local working vars (declare once to avoid duplicate-declaration errors)
+    Dim epNow As String, sel As Long
+    Dim createdVar As Variant, dtCreated As Date
+    Dim rDate As Variant, dtResolved As Date
+    Dim row As Long, d As Date, yMax As Double
+    Dim scope As Double, done As Double
+    Dim epI As String, cd As Variant, dc As Date
+    Dim spv As Double, rd As Variant, dr As Date
+
+    ' Sum StoryPoints by Epic
+    Dim totals As Object: Set totals = CreateObject("Scripting.Dictionary")
+    Dim i As Long
+    For i = 1 To nRows
+        Dim ep As String: ep = CStr(arrEpic(i, 1))
+        If Len(Trim$(ep)) = 0 Then ep = "(No Epic)"
+        Dim sp As Double: sp = Val(arrSP(i, 1))
+        Dim c As Variant: c = arrC(i, 1)
+        If sp > 0 And IsDate(c) Then
+            If Not totals.Exists(ep) Then totals(ep) = 0#
+            totals(ep) = CDbl(totals(ep)) + sp
+        End If
+    Next i
+    If totals.Count = 0 Then Exit Function
+
+    ' Pick top N epics by total SP
+    Dim keys() As Variant: keys = totals.Keys
+    Dim a As Long, b As Long
+    For a = LBound(keys) To UBound(keys) - 1
+        For b = a + 1 To UBound(keys)
+            If CDbl(totals(keys(b))) > CDbl(totals(keys(a))) Then
+                Dim tmp As Variant: tmp = keys(a): keys(a) = keys(b): keys(b) = tmp
+            End If
+        Next b
+    Next a
+    Dim m As Long
+    m = UBound(keys) - LBound(keys) + 1
+    If maxEpics <= 0 Then maxEpics = 10
+    If m > maxEpics Then m = maxEpics
+    If m <= 0 Then Exit Function
+
+    ' Copy selected epic names
+    Dim epics() As String
+    ReDim epics(1 To m)
+    For a = 1 To m
+        epics(a) = CStr(keys(LBound(keys) + a - 1))
+    Next a
+
+    ' Determine overall date range across selected epics
+    Dim minD As Date, maxD As Date, inited As Boolean
+    Dim r As Long
+    For i = 1 To nRows
+        epNow = CStr(arrEpic(i, 1))
+        If Len(Trim$(epNow)) = 0 Then epNow = "(No Epic)"
+        ' Check if this epic is selected
+        sel = 0
+        For r = 1 To m
+            If StrComp(epNow, epics(r), vbTextCompare) = 0 Then sel = r: Exit For
+        Next r
+        If sel > 0 Then
+            createdVar = arrC(i, 1)
+            If IsDate(createdVar) Then
+                dtCreated = DateSerial(Year(createdVar), Month(createdVar), Day(createdVar))
+                If Not inited Then
+                    minD = dtCreated
+                    maxD = dtCreated
+                    inited = True
+                Else
+                    If dtCreated < minD Then minD = dtCreated
+                    If dtCreated > maxD Then maxD = dtCreated
+                End If
+            End If
+            If idxR > 0 Then
+                rDate = arrR(i, 1)
+                If IsDate(rDate) Then
+                    dtResolved = DateSerial(Year(rDate), Month(rDate), Day(rDate))
+                    If Not inited Then
+                        minD = dtResolved
+                        maxD = dtResolved
+                        inited = True
+                    Else
+                        If dtResolved < minD Then minD = dtResolved
+                        If dtResolved > maxD Then maxD = dtResolved
+                    End If
+                End If
+            End If
+        End If
+    Next i
+    If Not inited Then Exit Function
+    If Date > maxD Then maxD = Date
+    ' Clamp long ranges: if >120 days, show last 90
+    If DateDiff("d", minD, maxD) > 120 Then minD = DateAdd("d", -90, maxD)
+
+    ' Write header
+    ws.Cells(topRow, 1).Value = "Epic Burndown (top " & m & ")"
+    ws.Cells(topRow, 1).Font.Bold = True
+    ws.Cells(topRow + 1, 1).Value = "Date"
+    For a = 1 To m
+        ws.Cells(topRow + 1, 1 + a).Value = epics(a)
+    Next a
+    ws.Range(ws.Cells(topRow + 1, 1), ws.Cells(topRow + 1, m + 1)).Font.Bold = True
+
+    ' Precompute remaining SP per epic per day
+    row = topRow + 2
+    yMax = 0
+    For d = minD To maxD
+        ws.Cells(row, 1).Value = d
+        ' For each epic, compute scope-done on day d
+        For a = 1 To m
+            scope = 0#
+            done = 0#
+            For i = 1 To nRows
+                epI = CStr(arrEpic(i, 1))
+                If Len(Trim$(epI)) = 0 Then epI = "(No Epic)"
+                If StrComp(epI, epics(a), vbTextCompare) = 0 Then
+                    cd = arrC(i, 1)
+                    If IsDate(cd) Then
+                        dc = DateSerial(Year(cd), Month(cd), Day(cd))
+                        If dc <= d Then
+                            spv = Val(arrSP(i, 1))
+                            If spv > 0 Then
+                                scope = scope + spv
+                                If idxR > 0 Then
+                                    rd = arrR(i, 1)
+                                    If IsDate(rd) Then
+                                        dr = DateSerial(Year(rd), Month(rd), Day(rd))
+                                        If dr <= d Then done = done + spv
+                                    End If
+                                End If
+                            End If
+                        End If
+                    End If
+                End If
+            Next i
+            Dim remSP As Double: remSP = scope - done
+            If remSP < 0 Then remSP = 0
+            ws.Cells(row, 1 + a).Value = remSP
+            If remSP > yMax Then yMax = remSP
+        Next a
+        row = row + 1
+    Next d
+
+    Dim lastRow As Long: lastRow = row - 1
+    ws.Range(ws.Cells(topRow + 1, 1), ws.Cells(lastRow, m + 1)).Columns.AutoFit
+
+    ' Build multi-series chart
+    Dim hdr As Range: Set hdr = ws.Cells(topRow + 1, 1)
+    Dim ch As ChartObject
+    Set ch = ws.ChartObjects.Add(Left:=400, Top:=ws.Cells(topRow, 1).Top, Width:=520, Height:=280)
+    ch.Chart.HasTitle = True
+    ch.Chart.ChartType = xlLine
+    On Error Resume Next
+    ch.Chart.ChartTitle.Text = CStr(ws.Cells(topRow, 1).Value)
+    On Error GoTo 0
+
+    For a = 1 To m
+        With ch.Chart.SeriesCollection.NewSeries
+            .Name = epics(a)
+            .XValues = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column), ws.Cells(lastRow, hdr.Column))
+            .Values = ws.Range(ws.Cells(hdr.Row + 1, hdr.Column + a), ws.Cells(lastRow, hdr.Column + a))
+            .ChartType = xlLine
+        End With
+    Next a
+
+    ' Axes formatting
+    Dim yMaxScale As Double
+    yMaxScale = Flow_NiceCeiling(Application.WorksheetFunction.Max(yMax, 3), 1)
+    If yMaxScale < 3 Then yMaxScale = 3
+    On Error Resume Next
+    With ch.Chart.Axes(1)
+        .MinimumScale = CDbl(ws.Cells(hdr.Row + 1, hdr.Column).Value)
+        .MaximumScale = CDbl(ws.Cells(lastRow, hdr.Column).Value)
+    End With
+    With ch.Chart.Axes(2)
+        .MinimumScale = 0
+        .MaximumScale = yMaxScale
+        .HasMajorGridlines = True
+        .MajorUnit = Flow_NiceMajorUnit(yMaxScale)
+    End With
+    On Error GoTo 0
+
+    ' Frame panel and return next row
+    Insights_FramePanel ws, topRow, 1, lastRow, m + 1
+    Jira_WriteEpicBurndown_All = lastRow + 2
+    Exit Function
+Fail:
+    Jira_WriteEpicBurndown_All = topRow
+End Function
+
+#End If ' ENABLE_EPIC_BURNDOWN
 
 Public Sub Jira_NormalizeIssues_FromSample()
     Jira_NormalizeIssues "Jira_Issues_Sample", "tblJiraIssuesSample"
