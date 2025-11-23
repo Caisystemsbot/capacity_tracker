@@ -1855,29 +1855,34 @@ Private Function Flow_WriteSprintSpan_Data(ByVal lo As ListObject, ByVal ws As W
         Dim span As Long, startNum As Integer
         Dim usedSprintParse As Boolean: usedSprintParse = False
         If idxSprintCol > 0 Then
-            Dim sRaw As String: sRaw = CStr(lo.DataBodyRange.Cells(i, idxSprintCol).Value)
-            If Len(Trim$(sRaw)) > 0 Then
-                Dim parts As Variant: parts = Split(sRaw, ",")
-                Dim earliest As String: earliest = Trim$(parts(UBound(parts)))
-                Dim yE As Integer, qE As Integer, sE As Integer
-                If ParseSprintTagByPattern(earliest, yE, qE, sE) Then
-                    startNum = sE
-                    ' Span by unique sprint labels present (best-effort)
-                    Dim seen As Object: Set seen = CreateObject("Scripting.Dictionary")
-                    Dim j As Long
-                    For j = LBound(parts) To UBound(parts)
-                        Dim nm As String: nm = Trim$(CStr(parts(j)))
-                        If Len(nm) > 0 Then
-                            If Not seen.Exists(nm) Then seen(nm) = True
-                        End If
-                    Next j
+        Dim sRaw As String: sRaw = CStr(lo.DataBodyRange.Cells(i, idxSprintCol).Value)
+        If Len(Trim$(sRaw)) > 0 Then
+            Dim sprintNames As Variant
+            sprintNames = Flow_ParseSprintMemberships(sRaw)
+            If IsArray(sprintNames) Then
+                Dim seen As Object: Set seen = CreateObject("Scripting.Dictionary")
+                Dim j As Long
+                For j = LBound(sprintNames) To UBound(sprintNames)
+                    Dim nm As String: nm = Trim$(CStr(sprintNames(j)))
+                    If Len(nm) > 0 Then
+                        Dim keyNm As String: keyNm = LCase$(nm)
+                        If Not seen.Exists(keyNm) Then seen(keyNm) = True
+                    End If
+                Next j
+                If seen.Count > 0 Then
                     span = Application.WorksheetFunction.Max(1, seen.Count)
-                    usedSprintParse = True
+                    Dim earliest As String: earliest = Trim$(CStr(sprintNames(UBound(sprintNames))))
+                    Dim yE As Integer, qE As Integer, sE As Integer
+                    If ParseSprintTagByPattern(earliest, yE, qE, sE) Then
+                        startNum = sE
+                        usedSprintParse = True
+                    End If
                 End If
             End If
         End If
+    End If
 
-        If Not usedSprintParse Then
+    If Not usedSprintParse Then
             Dim dCreated As Variant, dStart As Variant, dResolved As Variant
             If idxCreated > 0 Then dCreated = lo.DataBodyRange.Cells(i, idxCreated).Value Else dCreated = Empty
             If idxStart > 0 Then dStart = lo.DataBodyRange.Cells(i, idxStart).Value Else dStart = Empty
@@ -1916,6 +1921,46 @@ NextI:
 
     If row <= topRow + 2 Then Exit Function
     Flow_WriteSprintSpan_Data = True
+    Exit Function
+Fail:
+End Function
+
+' Parse the Jira Sprint custom field string (which may contain serialized sprint objects)
+' into an ordered array of sprint names (latest first, oldest last).
+Private Function Flow_ParseSprintMemberships(ByVal raw As String) As Variant
+    On Error GoTo Fail
+    Dim text As String: text = Trim$(raw)
+    If Len(text) = 0 Then Exit Function
+
+    Dim re As Object: Set re = CreateObject("VBScript.RegExp")
+    re.Global = True
+    re.IgnoreCase = True
+    re.Pattern = "name\s*=\s*([^,\]]+)"
+    Dim matches As Object: Set matches = re.Execute(text)
+    Dim arr() As String
+    Dim idx As Long
+    If matches.Count > 0 Then
+        ReDim arr(0 To matches.Count - 1)
+        For idx = 0 To matches.Count - 1
+            arr(idx) = Trim$(matches(idx).SubMatches(0))
+        Next idx
+        Flow_ParseSprintMemberships = arr
+        Exit Function
+    End If
+
+    Dim cleaned As String
+    cleaned = Replace$(Replace$(Replace$(text, "[", ""), "]", ""), """", "")
+    Dim parts As Variant: parts = Split(cleaned, ",")
+    Dim count As Long
+    For idx = LBound(parts) To UBound(parts)
+        Dim token As String: token = Trim$(CStr(parts(idx)))
+        If Len(token) > 0 Then
+            ReDim Preserve arr(0 To count)
+            arr(count) = token
+            count = count + 1
+        End If
+    Next idx
+    If count > 0 Then Flow_ParseSprintMemberships = arr
     Exit Function
 Fail:
 End Function
